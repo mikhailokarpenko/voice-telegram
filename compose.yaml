@@ -1,0 +1,13 @@
+services:
+  telegram-voice:
+    container_name: voice-telegram
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    networks:
+      - bashpwnz_default
+    command: ["python", "-m", "voice_telegram.main"]
+
+networks:
+  bashpwnz_default:
+    external: true
