@@ -48,7 +48,7 @@ class RealtimeBridge:
 
     async def send_audio(self, pcm: bytes) -> None:
         """Send PCM16 audio to OpenAI (base64 encoded)."""
-        if not self.connection:
+        if not self.connection or not pcm:
             return
         b64 = base64.b64encode(pcm).decode("utf-8")
         await self.connection.send_audio(b64)

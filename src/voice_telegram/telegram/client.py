@@ -6,6 +6,8 @@ AI response back to the caller.
 
 import asyncio
 import logging
+import time
+from collections import deque
 from typing import Optional
 
 from pyrogram import Client
@@ -14,8 +16,10 @@ from pytgcalls import PyTgCalls
 from pytgcalls import filters as tgfilters
 from pytgcalls.types import (
     CallConfig,
+    Device,
     Direction,
     ExternalMedia,
+    Frame,
     MediaStream,
     RecordStream,
     StreamEnded,
@@ -25,6 +29,7 @@ from pytgcalls.types.raw import AudioParameters
 
 from voice_telegram.audio import (
     TELEGRAM_FRAME_BYTES,
+    reset_resamplers,
     resample_24k_to_48k_stereo,
     resample_48k_to_24k_mono,
 )
@@ -56,7 +61,9 @@ class TelegramVoiceClient:
         self._active_call_id: Optional[int] = None
         self._bridge: Optional[RealtimeBridge] = None
         self._event_task: Optional[asyncio.Task] = None
+        self._audio_sender_task: Optional[asyncio.Task] = None
         self._outbound_buf = bytearray()
+        self._outbound_frames: deque[bytes] = deque()
 
     # ------------------------------------------------------------------ #
     # Lifecycle                                                           #
@@ -141,6 +148,8 @@ class TelegramVoiceClient:
         self._active_user_id = user_id
         self._active_call_id = call_id
         self._outbound_buf.clear()
+        self._outbound_frames.clear()
+        reset_resamplers()
 
         try:
             # Accept the call with an external-media stream so we can push
@@ -149,7 +158,7 @@ class TelegramVoiceClient:
                 user_id,
                 MediaStream(
                     ExternalMedia.AUDIO,
-                    audio_parameters=AudioParameters(bitrate=48000, channels=1),
+                    audio_parameters=AudioParameters(bitrate=48000, channels=2),
                     audio_flags=MediaStream.Flags.REQUIRED,
                     video_flags=MediaStream.Flags.IGNORE,
                 ),
@@ -185,6 +194,7 @@ class TelegramVoiceClient:
 
             # Start consuming OpenAI events in the background
             self._event_task = asyncio.create_task(self._consume_openai_events())
+            self._audio_sender_task = asyncio.create_task(self._audio_sender())
         except Exception:
             log.exception("Failed to connect OpenAI bridge")
             await self._teardown_call()
@@ -199,7 +209,8 @@ class TelegramVoiceClient:
             return
         try:
             pcm_24k = resample_48k_to_24k_mono(pcm_48k)
-            await self._bridge.send_audio(pcm_24k)
+            if pcm_24k:
+                await self._bridge.send_audio(pcm_24k)
         except Exception:
             log.exception("Error forwarding audio to OpenAI")
 
@@ -214,6 +225,7 @@ class TelegramVoiceClient:
         try:
             async for event in self._bridge.events():
                 if event.type == EventType.AUDIO and event.data:
+                    log.info("Received audio from OpenAI: %d bytes", len(event.data))
                     await self._send_audio_to_telegram(event.data)
                 elif event.type == EventType.SPEECH_STARTED:
                     # Caller started speaking — cancel any in-progress response
@@ -221,6 +233,7 @@ class TelegramVoiceClient:
                     log.debug("Caller speech started — cancelling response")
                     await self._bridge.cancel_response()
                     self._outbound_buf.clear()
+                    self._outbound_frames.clear()
                 elif event.type == EventType.CALLER_TRANSCRIPT:
                     log.info("Caller said: %s", event.data)
                 elif event.type == EventType.AGENT_TRANSCRIPT:
@@ -233,22 +246,65 @@ class TelegramVoiceClient:
             log.exception("OpenAI event consumer crashed")
 
     async def _send_audio_to_telegram(self, pcm_24k: bytes) -> None:
-        """Resample OpenAI audio to 48 kHz stereo and push Telegram-sized frames."""
+        """Resample OpenAI audio to 48 kHz stereo and queue Telegram-sized frames."""
         if not self.pytgcalls or not self._active_user_id:
             return
 
-        pcm_48k_stereo = resample_24k_to_48k_stereo(pcm_24k)
-        self._outbound_buf.extend(pcm_48k_stereo)
-
-        # Drain complete 20 ms frames (3840 bytes at 48 kHz stereo 16-bit)
+        self._outbound_buf.extend(resample_24k_to_48k_stereo(pcm_24k))
         while len(self._outbound_buf) >= TELEGRAM_FRAME_BYTES:
             frame = bytes(self._outbound_buf[:TELEGRAM_FRAME_BYTES])
             del self._outbound_buf[:TELEGRAM_FRAME_BYTES]
+            self._outbound_frames.append(frame)
+
+    async def _audio_sender(self) -> None:
+        loop = asyncio.get_running_loop()
+        silence_frame = b"\x00" * TELEGRAM_FRAME_BYTES
+        playing = False
+        concealment_frames = 0
+        start_wall = time.time()
+        start_mono = loop.time()
+        frame_index = 0
+
+        while self.pytgcalls and self._active_user_id:
+            if not playing:
+                if len(self._outbound_frames) < 28:
+                    await asyncio.sleep(0.002)
+                    continue
+                playing = True
+                concealment_frames = 0
+                start_wall = time.time()
+                start_mono = loop.time()
+                frame_index = 0
+
+            if self._outbound_frames:
+                frame = self._outbound_frames.popleft()
+                concealment_frames = 0
+            elif concealment_frames < 2:
+                frame = silence_frame
+                concealment_frames += 1
+            else:
+                log.warning("Playback underrun after %d frames", frame_index)
+                playing = False
+                continue
+
+            if frame_index % 100 == 0:
+                log.info("Playback frame %d, queued=%d", frame_index, len(self._outbound_frames))
+            capture_time = int((start_wall + frame_index * 0.02) * 1000)
             try:
-                await self.pytgcalls.send_frame(self._active_user_id, frame)
+                await self.pytgcalls.send_frame(
+                    self._active_user_id,
+                    Device.MICROPHONE,
+                    frame,
+                    Frame.Info(capture_time=capture_time),
+                )
             except Exception:
                 log.exception("Error sending frame to Telegram")
                 return
+
+            frame_index += 1
+            sleep_time = frame_index * 0.02 - (loop.time() - start_mono)
+            if sleep_time > 0:
+                await asyncio.sleep(sleep_time)
 
     # ------------------------------------------------------------------ #
     # Cleanup                                                              #
@@ -256,6 +312,14 @@ class TelegramVoiceClient:
 
     async def _teardown_call(self) -> None:
         """Close the OpenAI bridge and reset call state."""
+        if self._audio_sender_task and not self._audio_sender_task.done():
+            self._audio_sender_task.cancel()
+            try:
+                await self._audio_sender_task
+            except asyncio.CancelledError:
+                pass
+            self._audio_sender_task = None
+
         if self._event_task and not self._event_task.done():
             self._event_task.cancel()
             try:
@@ -274,3 +338,4 @@ class TelegramVoiceClient:
         self._active_user_id = None
         self._active_call_id = None
         self._outbound_buf.clear()
+        self._outbound_frames.clear()

@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     database_url: str = "postgresql+asyncpg://voice_telegram:voice_telegram@localhost:5432/voice_telegram"
     openai_api_key: SecretStr = SecretStr("")
-    openai_realtime_model: str = "gpt-4o"
+    openai_realtime_model: str = "gpt-realtime-2.1"
     openai_voice: str = "marin"
     telegram_api_id: int = 0
     telegram_api_hash: SecretStr = SecretStr("")

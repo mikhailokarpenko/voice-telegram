@@ -17,34 +17,39 @@ OPENAI_CHUNK_MS = 100
 OPENAI_CHUNK_BYTES = OPENAI_SAMPLE_RATE * OPENAI_CHUNK_MS // 1000 * 2  # 4800 bytes per chunk (24kHz, 16-bit, mono)
 
 
+class StreamingResampler:
+    def __init__(self, input_rate: int, output_rate: int) -> None:
+        self._stream = soxr.ResampleStream(
+            input_rate, output_rate, 1, dtype="int16", quality="HQ"
+        )
+
+    def process(self, pcm: bytes) -> bytes:
+        if not pcm:
+            return b""
+        samples = np.frombuffer(pcm, dtype=np.int16).copy()
+        output = self._stream.resample_chunk(samples)
+        return output.astype(np.int16, copy=False).tobytes()
+
+
+_input_resampler: StreamingResampler
+_output_resampler: StreamingResampler
+
+
 def resample_48k_to_24k_mono(pcm_48k: bytes) -> bytes:
     """Resample 48kHz mono PCM16 to 24kHz mono PCM16."""
-    if not pcm_48k:
-        return b""
-    arr = np.frombuffer(pcm_48k, dtype=np.int16)
-    resampled = soxr.resample(
-        arr,
-        TELEGRAM_SAMPLE_RATE,
-        OPENAI_SAMPLE_RATE,
-        quality="HQ",
-    )
-    return resampled.astype(np.int16).tobytes()
+    return _input_resampler.process(pcm_48k)
 
 
 def resample_24k_to_48k_stereo(pcm_24k: bytes) -> bytes:
     """Resample 24kHz mono PCM16 to 48kHz stereo PCM16."""
-    if not pcm_24k:
+    mono_48k = _output_resampler.process(pcm_24k)
+    if not mono_48k:
         return b""
-    arr = np.frombuffer(pcm_24k, dtype=np.int16)
-    resampled = soxr.resample(
-        arr,
-        OPENAI_SAMPLE_RATE,
-        TELEGRAM_SAMPLE_RATE,
-        quality="HQ",
-    )
-    # Convert mono to stereo by duplicating channels
-    stereo = np.column_stack((resampled, resampled))
-    return stereo.astype(np.int16).tobytes()
+    mono = np.frombuffer(mono_48k, dtype=np.int16)
+    stereo = np.empty(mono.size * 2, dtype=np.int16)
+    stereo[0::2] = mono
+    stereo[1::2] = mono
+    return stereo.tobytes()
 
 
 def gate_noise_floor(pcm: bytes, rms_threshold: float) -> bytes:
@@ -59,5 +64,10 @@ def gate_noise_floor(pcm: bytes, rms_threshold: float) -> bytes:
 
 
 def reset_resamplers() -> None:
-    """Reset any resampler state (placeholder for soxr state if needed)."""
-    pass
+    """Reset streaming resampler state for a new call."""
+    global _input_resampler, _output_resampler
+    _input_resampler = StreamingResampler(TELEGRAM_SAMPLE_RATE, OPENAI_SAMPLE_RATE)
+    _output_resampler = StreamingResampler(OPENAI_SAMPLE_RATE, TELEGRAM_SAMPLE_RATE)
+
+
+reset_resamplers()
