@@ -7,9 +7,9 @@ AI response back to the caller.
 import asyncio
 import logging
 import os
+import uuid
 from collections import deque
 from pathlib import Path
-from typing import Optional
 
 from pyrogram import Client
 from pyrogram.raw.types import PhoneCallDiscarded, PhoneCallRequested, UpdatePhoneCall
@@ -25,13 +25,16 @@ from pytgcalls.types import (
 )
 from pytgcalls.types.raw import AudioParameters
 
+from voice_telegram.admin.repository import AgentConfigRepository
 from voice_telegram.audio import (
     TELEGRAM_FRAME_BYTES,
-    reset_resamplers,
     resample_24k_to_48k_stereo,
     resample_48k_to_24k_mono,
+    reset_resamplers,
 )
+from voice_telegram.calls.repository import TelegramCallRepository
 from voice_telegram.config import Settings
+from voice_telegram.database import Database
 from voice_telegram.providers.base import EventType, RealtimeSession
 from voice_telegram.providers.bridge import RealtimeBridge
 
@@ -51,19 +54,22 @@ OPENING_MESSAGE = "Ahoy! A new matey be callin'! Greet them like a proper drunk 
 
 
 class TelegramVoiceClient:
-    def __init__(self, settings: Settings, database: Optional[object]) -> None:
+    def __init__(self, settings: Settings, database: Database) -> None:
         self.settings = settings
-        self.app: Optional[Client] = None
-        self.pytgcalls: Optional[PyTgCalls] = None
-        self._active_user_id: Optional[int] = None
-        self._active_call_id: Optional[int] = None
-        self._bridge: Optional[RealtimeBridge] = None
-        self._event_task: Optional[asyncio.Task] = None
-        self._audio_sender_task: Optional[asyncio.Task] = None
+        self.database = database
+        self.app: Client | None = None
+        self.pytgcalls: PyTgCalls | None = None
+        self._active_user_id: int | None = None
+        self._active_call_id: int | None = None
+        self._bridge: RealtimeBridge | None = None
+        self._event_task: asyncio.Task[None] | None = None
+        self._audio_sender_task: asyncio.Task[None] | None = None
         self._outbound_buf = bytearray()
         self._outbound_frames: deque[bytes] = deque()
         self._audio_fifo = Path("/tmp/voice-telegram-output.pcm")
-        self._audio_fifo_fd: Optional[int] = None
+        self._audio_fifo_fd: int | None = None
+        self._call_record_id: uuid.UUID | None = None
+        self._transcript: list[str] = []
 
     # ------------------------------------------------------------------ #
     # Lifecycle                                                           #
@@ -149,7 +155,15 @@ class TelegramVoiceClient:
         self._active_call_id = call_id
         self._outbound_buf.clear()
         self._outbound_frames.clear()
+        self._transcript.clear()
         reset_resamplers()
+
+        active_config = None
+        async for db_session in self.database.session():
+            active_config = await AgentConfigRepository(db_session).get_active()
+            call = await TelegramCallRepository(db_session).create(telegram_user_id=user_id)
+            await TelegramCallRepository(db_session).set_status(call, "in-progress")
+            self._call_record_id = call.id
 
         try:
             self._audio_fifo.unlink(missing_ok=True)
@@ -188,11 +202,21 @@ class TelegramVoiceClient:
         # Open the OpenAI Realtime bridge
         try:
             session = RealtimeSession(
-                instructions=SYSTEM_PROMPT,
-                opening_message=OPENING_MESSAGE,
-                voice=self.settings.openai_voice,
-                vad_threshold=self.settings.vad_threshold,
-                silence_duration_ms=self.settings.silence_duration_ms,
+                instructions=(
+                    active_config.agent_prompt if active_config else self.settings.agent_prompt
+                ),
+                opening_message=(
+                    active_config.intro_prompt if active_config else self.settings.intro_prompt
+                ),
+                voice=(active_config.openai_voice if active_config else self.settings.openai_voice),
+                vad_threshold=(
+                    active_config.vad_threshold if active_config else self.settings.vad_threshold
+                ),
+                silence_duration_ms=(
+                    active_config.silence_duration_ms
+                    if active_config
+                    else self.settings.silence_duration_ms
+                ),
             )
             self._bridge = RealtimeBridge(self.settings, session)
             await self._bridge.connect()
@@ -241,8 +265,10 @@ class TelegramVoiceClient:
                     self._outbound_frames.clear()
                 elif event.type == EventType.CALLER_TRANSCRIPT:
                     log.info("Caller said: %s", event.data)
+                    self._transcript.append(f"Caller: {event.data}")
                 elif event.type == EventType.AGENT_TRANSCRIPT:
                     log.info("Agent said: %s", event.data)
+                    self._transcript.append(f"Agent: {event.data}")
                 elif event.type == EventType.ERROR:
                     log.error("OpenAI error: %s", event.data)
         except asyncio.CancelledError:
@@ -295,6 +321,15 @@ class TelegramVoiceClient:
 
     async def _teardown_call(self) -> None:
         """Close the OpenAI bridge and reset call state."""
+        if self._call_record_id:
+            async for db_session in self.database.session():
+                repo = TelegramCallRepository(db_session)
+                call = await repo.get(self._call_record_id)
+                if call:
+                    await repo.save_transcript(call, self._transcript)
+                    await repo.set_status(call, "completed")
+            self._call_record_id = None
+
         if self._audio_sender_task and not self._audio_sender_task.done():
             self._audio_sender_task.cancel()
             try:

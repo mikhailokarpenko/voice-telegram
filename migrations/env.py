@@ -1,13 +1,11 @@
 import asyncio
-from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config
 from sqlalchemy.ext.asyncio import async_engine_from_config
-from sqlalchemy.orm import sessionmaker
 
-from voice_telegram.config import Settings, get_settings
+from voice_telegram.admin.models import AgentConfig  # noqa: F401
 from voice_telegram.calls.models import Base
+from voice_telegram.config import get_settings
 
 # this is the Alembic Config object
 config = context.config

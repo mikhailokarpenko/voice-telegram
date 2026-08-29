@@ -28,5 +28,6 @@ voice_telegram_session/
 *.session
 *.session-journal
 sessions/
-auth.py
-auth-compose.yaml
+/auth.py
+/src/auth.py
+/auth-compose.yaml

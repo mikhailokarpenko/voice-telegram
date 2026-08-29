@@ -6,9 +6,8 @@ the audio format differences (PCM16 base64 encoding for Telegram).
 
 import base64
 import logging
-from typing import Any
 
-from websockets.asyncio.client import ClientConnection, connect
+from websockets.asyncio.client import connect
 
 from voice_telegram.config import Settings
 from voice_telegram.providers.base import EventType, RealtimeEvent, RealtimeSession
@@ -28,12 +27,14 @@ class RealtimeBridge:
         self.connection: OpenAIRealtimeConnection | None = None
 
     async def connect(self) -> None:
-        api_key = self.settings.openai_api_key.get_secret_value()
+        api_key = self.settings.litellm_api_key.get_secret_value()
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is required")
+            raise RuntimeError("LITELLM_API_KEY is required")
 
+        base_url = self.settings.litellm_base_url.rstrip("/")
+        websocket_url = base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
         socket = await connect(
-            f"wss://api.openai.com/v1/realtime?model={self.settings.openai_realtime_model}",
+            f"{websocket_url}/v1/realtime?model={self.settings.litellm_realtime_model}",
             additional_headers={
                 "Authorization": f"Bearer {api_key}",
             },

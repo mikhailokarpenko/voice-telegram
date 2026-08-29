@@ -10,7 +10,9 @@ services:
       - ./sessions:/app/sessions
     networks:
       - bashpwnz_default
-    command: ["python", "-m", "voice_telegram.main"]
+    command: ["sh", "-c", "alembic upgrade head && python -m voice_telegram.main"]
+    expose:
+      - "8000"
     mem_limit: 512m
 
 networks:

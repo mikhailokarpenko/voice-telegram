@@ -5,7 +5,12 @@ from typing import Any
 from websockets.asyncio.client import ClientConnection, connect
 
 from voice_telegram.config import Settings
-from voice_telegram.providers.base import EventType, RealtimeConnection, RealtimeEvent, RealtimeSession
+from voice_telegram.providers.base import (
+    EventType,
+    RealtimeConnection,
+    RealtimeEvent,
+    RealtimeSession,
+)
 
 
 class OpenAIRealtimeConnection(RealtimeConnection):
@@ -84,16 +89,12 @@ class OpenAIRealtimeConnection(RealtimeConnection):
             # OpenAI returns base64-encoded PCM16
             return RealtimeEvent(EventType.AUDIO, str(message.get("delta", "")))
         if event_type == "conversation.item.input_audio_transcription.completed":
-            return RealtimeEvent(
-                EventType.CALLER_TRANSCRIPT, str(message.get("transcript", ""))
-            )
+            return RealtimeEvent(EventType.CALLER_TRANSCRIPT, str(message.get("transcript", "")))
         if event_type in {
             "response.audio_transcript.done",
             "response.output_audio_transcript.done",
         }:
-            return RealtimeEvent(
-                EventType.AGENT_TRANSCRIPT, str(message.get("transcript", ""))
-            )
+            return RealtimeEvent(EventType.AGENT_TRANSCRIPT, str(message.get("transcript", "")))
         if event_type == "input_audio_buffer.speech_started":
             return RealtimeEvent(EventType.SPEECH_STARTED)
         if event_type == "input_audio_buffer.speech_stopped":
@@ -103,16 +104,18 @@ class OpenAIRealtimeConnection(RealtimeConnection):
         return None
 
 
-class OpenAIRealtimeProvider:
+class LiteLLMRealtimeProvider:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
     async def connect(self) -> RealtimeConnection:
-        api_key = self.settings.openai_api_key.get_secret_value()
+        api_key = self.settings.litellm_api_key.get_secret_value()
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is required")
+            raise RuntimeError("LITELLM_API_KEY is required")
+        base_url = self.settings.litellm_base_url.rstrip("/")
+        websocket_url = base_url.replace("https://", "wss://", 1).replace("http://", "ws://", 1)
         socket = await connect(
-            f"wss://api.openai.com/v1/realtime?model={self.settings.openai_realtime_model}",
+            f"{websocket_url}/v1/realtime?model={self.settings.litellm_realtime_model}",
             additional_headers={
                 "Authorization": f"Bearer {api_key}",
             },

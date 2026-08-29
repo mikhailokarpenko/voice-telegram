@@ -2,7 +2,7 @@ import secrets
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,10 +11,23 @@ class Settings(BaseSettings):
 
     environment: Literal["development", "test", "production"] = "development"
     log_level: str = "INFO"
-    database_url: str = "postgresql+asyncpg://voice_telegram:voice_telegram@localhost:5432/voice_telegram"
-    openai_api_key: SecretStr = SecretStr("")
-    openai_realtime_model: str = "gpt-realtime-2.1"
+    public_base_url: str = "http://localhost:8000"
+    database_url: str = (
+        "postgresql+asyncpg://voice_telegram:voice_telegram@localhost:5432/voice_telegram"
+    )
+    litellm_base_url: str = "http://litellm:4000"
+    litellm_api_key: SecretStr = SecretStr("")
+    litellm_realtime_model: Literal["litellm/realtime-main"] = "litellm/realtime-main"
     openai_voice: str = "marin"
+    agent_name: str = "Captain Blackbeard"
+    agent_company: str = ""
+    agent_prompt: str = (
+        "You are a drunk pirate. You slur your words, hiccup mid-sentence, ramble about "
+        "treasure and the sea, call everyone 'matey', and keep answers short."
+    )
+    intro_prompt: str = "Ahoy! Greet the caller like a proper drunk pirate."
+    greeting_style: str = "casual"
+    custom_greeting: str = ""
     telegram_api_id: int = 0
     telegram_api_hash: SecretStr = SecretStr("")
     telegram_phone: str = ""
