@@ -19,26 +19,17 @@ class OpenAIRealtimeConnection(RealtimeConnection):
             {
                 "type": "session.update",
                 "session": {
-                    "type": "realtime",
+                    "modalities": ["text", "audio"],
                     "instructions": session.instructions,
-                    "output_modalities": ["audio"],
-                    "audio": {
-                        "input": {
-                            "format": {"type": "audio/pcm16"},
-                            "sample_rate": 24000,
-                            "transcription": {"model": "whisper-1"},
-                            "turn_detection": {
-                                "type": "server_vad",
-                                "threshold": session.vad_threshold,
-                                "prefix_padding_ms": 300,
-                                "silence_duration_ms": session.silence_duration_ms,
-                            },
-                        },
-                        "output": {
-                            "format": {"type": "audio/pcm16"},
-                            "sample_rate": 24000,
-                            "voice": voice,
-                        },
+                    "voice": voice,
+                    "input_audio_format": "pcm16",
+                    "output_audio_format": "pcm16",
+                    "input_audio_transcription": {"model": "whisper-1"},
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": session.vad_threshold,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": session.silence_duration_ms,
                     },
                 },
             }

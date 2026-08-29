@@ -1,12 +1,17 @@
 services:
-  telegram-voice:
+  voice-telegram:
     container_name: voice-telegram
     build: .
     restart: unless-stopped
     env_file: .env
+    volumes:
+      # Pyrogram session lives on the host so logins survive rebuilds and are
+      # not baked into the image.
+      - ./sessions:/app/sessions
     networks:
       - bashpwnz_default
     command: ["python", "-m", "voice_telegram.main"]
+    mem_limit: 512m
 
 networks:
   bashpwnz_default:
