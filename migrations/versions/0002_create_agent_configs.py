@@ -19,7 +19,7 @@ def upgrade() -> None:
         sa.Column("agent_name", sa.String(128), nullable=False),
         sa.Column("agent_company", sa.String(128), nullable=False),
         sa.Column("agent_prompt", sa.Text(), nullable=False),
-        sa.Column("intro_prompt", sa.Text(), nullable=False),
+        sa.Column("intro_prompt", sa.Text(), server_default="Ahoy!", nullable=False),
         sa.Column("openai_voice", sa.String(32), nullable=False),
         sa.Column("max_call_seconds", sa.Integer(), nullable=False),
         sa.Column("greeting_style", sa.String(32), nullable=False),

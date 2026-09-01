@@ -15,7 +15,7 @@ class AgentConfig(Base):
     agent_name: Mapped[str] = mapped_column(String(128), default="Assistant")
     agent_company: Mapped[str] = mapped_column(String(128), default="")
     agent_prompt: Mapped[str] = mapped_column(Text, default="You are a helpful voice assistant.")
-    intro_prompt: Mapped[str] = mapped_column(Text, default="")
+    intro_prompt: Mapped[str] = mapped_column(Text, default="Ahoy!")
     openai_voice: Mapped[str] = mapped_column(String(32), default="marin")
     max_call_seconds: Mapped[int] = mapped_column(Integer, default=1800)
     greeting_style: Mapped[str] = mapped_column(String(32), default="casual")

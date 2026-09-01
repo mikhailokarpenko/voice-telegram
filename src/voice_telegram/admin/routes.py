@@ -1,9 +1,12 @@
+import asyncio
 import math
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,7 +46,7 @@ class ConfigPayload(BaseModel):
     agent_name: str = Field(max_length=128)
     agent_company: str = Field(default="", max_length=128)
     agent_prompt: str
-    intro_prompt: str = ""
+    intro_prompt: str = "Ahoy!"
     openai_voice: str = Field(default="marin", max_length=32)
     max_call_seconds: int = Field(default=1800, ge=60, le=7200)
     greeting_style: str = Field(default="casual", max_length=32)
@@ -67,6 +70,7 @@ class CallItem(BaseModel):
     ended_at: datetime | None = None
     transcript: str | None = None
     error: str | None = None
+    has_recording: bool = False
 
 
 class CallListResponse(BaseModel):
@@ -183,6 +187,7 @@ async def list_calls(
                 ended_at=call.ended_at,
                 transcript=call.transcript,
                 error=call.error,
+                has_recording=bool(call.recording_key),
             )
             for call in calls
         ],
@@ -211,6 +216,35 @@ async def get_call(
         ended_at=call.ended_at,
         transcript=call.transcript,
         error=call.error,
+        has_recording=bool(call.recording_key),
+    )
+
+
+@router.get("/calls/{call_id}/recording", response_class=FileResponse)
+async def get_call_recording(
+    call_id: uuid.UUID,
+    request: Request,
+    session: AsyncSession = Depends(get_db_session),
+    _claims: dict[str, Any] = Depends(_require_auth),
+) -> FileResponse:
+    call = await session.get(TelegramCall, call_id)
+    if not call:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Call not found")
+    if not call.recording_key:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Recording not found")
+
+    def resolve_recording() -> Path | None:
+        root = Path(_get_settings(request).recording_storage_path).resolve()
+        path = (root / call.recording_key).resolve()
+        return path if path.is_relative_to(root) and path.is_file() else None
+
+    recording_path = await asyncio.to_thread(resolve_recording)
+    if not recording_path:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Recording not found")
+    return FileResponse(
+        recording_path,
+        media_type="audio/wav",
+        filename=f"call-{call.id}.wav",
     )
 
 
