@@ -25,7 +25,7 @@ class Settings(BaseSettings):
         "You are a drunk pirate. You slur your words, hiccup mid-sentence, ramble about "
         "treasure and the sea, call everyone 'matey', and keep answers short."
     )
-    intro_prompt: str = "Ahoy!"
+    intro_prompt: str = "Ahoy! Greet the caller like a proper drunk pirate."
     greeting_style: str = "casual"
     custom_greeting: str = ""
     telegram_api_id: int = 0
@@ -36,7 +36,6 @@ class Settings(BaseSettings):
     max_call_seconds: int = 1800
     vad_threshold: float = 0.5
     silence_duration_ms: int = 500
-    recording_storage_path: str = "/app/recordings"
 
 
 @lru_cache
