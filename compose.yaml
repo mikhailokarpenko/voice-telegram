@@ -9,6 +9,7 @@ services:
       # not baked into the image.
       - ./sessions:/app/sessions
     networks:
+      - infrastructure_default
       - bashpwnz_default
     command: ["sh", "-c", "alembic upgrade head && python -m voice_telegram.main"]
     expose:
@@ -16,5 +17,7 @@ services:
     mem_limit: 512m
 
 networks:
+  infrastructure_default:
+    external: true
   bashpwnz_default:
     external: true
