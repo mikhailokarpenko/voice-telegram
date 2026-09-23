@@ -1,56 +1,57 @@
 #!/usr/bin/env node
-// Guard: every voice service must install the security-response-header
-// middleware, and the CSP must keep the exfiltration channels closed.
+// Guard: every voice service must ship the BAS-213 defence-in-depth response
+// headers, and the CSP must keep the exfiltration channels shut.
 //
-// Why this exists (BAS-213 follow-up):
-//   The admin dashboards render call fields that an attacker controls end to
-//   end (Twilio `From`/`To`/`CallSid` from the inbound webhook form, provider
-//   `error` strings). Those are escaped now, but escaping is one line of code
-//   away from regressing. The headers are the second layer:
-//     * `connect-src`/`img-src`/`media-src 'self'` -> an injected payload has
-//       no outbound channel for transcripts, recordings or the agent prompt.
-//     * `object-src`/`base-uri 'none'` -> no plugin or <base> hijack.
-//     * `frame-ancestors 'none'` + `X-Frame-Options: DENY` -> the admin
-//       controls (PUT /api/admin/config) cannot be clickjacked.
-//     * `form-action 'self'` -> no credential-posting form to an attacker host.
-//   `script-src`/`style-src` still need 'unsafe-inline' because the dashboards
-//   are single-file inline HTML; that is a known, deliberate limitation and is
-//   asserted here so it cannot silently widen further (no `*`, no
-//   'unsafe-eval', and the CSS CDN must never appear in `script-src`).
+// Why this exists:
+//   * The stored-XSS fix (check-admin-xss.mjs) escapes the Twilio-controlled
+//     call fields. That is one layer. If an escaper ever regresses -- a new
+//     column rendered with plain concatenation, a refactor that drops `esc()`
+//     -- the payload runs in the authenticated admin origin again.
+//   * The headers asserted here cap that blast radius: `connect-src 'self'`
+//     and `img-src`/`media-src` pinned to 'self' mean an injected script cannot
+//     beacon transcripts or call recordings to an attacker host;
+//     `frame-ancestors 'none'` + `X-Frame-Options: DENY` block clickjacking of
+//     the admin controls; `object-src`/`base-uri 'none'` kill plugin and <base>
+//     hijack tricks; `form-action 'self'` stops credential-posting forms.
+//   * The dashboards still use inline <script>/<style> and inline handlers, so
+//     script-src/style-src must allow 'unsafe-inline' today. That is a recorded
+//     limitation, NOT a licence to also allow 'unsafe-eval', a wildcard host,
+//     or the CSS CDN in script-src -- each of those would reopen a channel this
+//     guard is here to keep closed. Those are asserted as hard failures.
+//
+// The guard is static (node-only, no Python/deps) so it runs in the `guards` CI
+// job on every push; the pytest suite (tests/test_security_headers.py) covers
+// the runtime behaviour.
 //
 // Run: node scripts/check-security-headers.mjs   (exit 0 = safe)
 
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const selfRoot = join(fileURLToPath(new URL(".", import.meta.url)), "..");
-const siblingRoot = join(selfRoot, "..");
-
-// repoDir -> { module, app } paths relative to the repo root
-const REPOS = {
-  "voice-phone": {
-    module: "src/voice_agent/security_headers.py",
-    app: "src/voice_agent/main.py",
-  },
-  "voice-telegram": {
-    module: "src/voice_telegram/security_headers.py",
-    app: "src/voice_telegram/main.py",
-  },
-  "voice-web": {
-    module: "src/voice_web/security_headers.py",
-    app: "src/voice_web/main.py",
-  },
-};
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const srcRoot = join(repoRoot, "src");
 
 const failures = [];
-const notes = [];
-const check = (name, ok, detail = "") => {
-  if (ok) notes.push(`  ok   ${name}`);
-  else failures.push(`  FAIL ${name}${detail ? ` — ${detail}` : ""}`);
-};
+const fail = (msg) => failures.push(msg);
 
-const REQUIRED_DIRECTIVES = {
+if (!existsSync(srcRoot)) {
+  fail("src/ not found; guard must run from the repo root");
+}
+
+const packages = existsSync(srcRoot)
+  ? readdirSync(srcRoot, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && existsSync(join(srcRoot, e.name, "main.py")))
+      .map((e) => e.name)
+  : [];
+
+if (packages.length === 0) {
+  fail("no python package with a main.py found under src/");
+}
+
+// Directives that must be present with exactly this value. These are the ones
+// that carry security weight; loosening any of them is the regression.
+const REQUIRED_EXACT = {
   "default-src": "'self'",
   "connect-src": "'self'",
   "media-src": "'self'",
@@ -60,115 +61,145 @@ const REQUIRED_DIRECTIVES = {
   "form-action": "'self'",
 };
 
-const REQUIRED_HEADERS = [
-  ["X-Frame-Options", "DENY"],
-  ["X-Content-Type-Options", "nosniff"],
-  ["Referrer-Policy", "no-referrer"],
-  ["Cross-Origin-Opener-Policy", "same-origin"],
-  ["Cross-Origin-Resource-Policy", "same-origin"],
-  ["Permissions-Policy", null],
-];
+const REQUIRED_HEADERS = {
+  "X-Frame-Options": "DENY",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Resource-Policy": "same-origin",
+};
 
-function resolveRepo(dir) {
-  // Works both from inside the repo itself and from the voice-suite layout.
-  if (existsSync(join(selfRoot, REPOS[dir].module))) {
-    // selfRoot IS this repo — only if the package name matches.
-    const own = Object.keys(REPOS).filter((d) =>
-      existsSync(join(selfRoot, REPOS[d].module)),
-    );
-    if (own.includes(dir)) return selfRoot;
-  }
-  const sibling = join(siblingRoot, dir);
-  if (existsSync(join(sibling, REPOS[dir].module))) return sibling;
-  return null;
-}
+for (const pkg of packages) {
+  const mod = join(srcRoot, pkg, "security_headers.py");
+  const main = join(srcRoot, pkg, "main.py");
+  const where = (m) => fail(`${pkg}: ${m}`);
 
-let checkedAny = false;
-
-for (const [dir, rel] of Object.entries(REPOS)) {
-  const root = resolveRepo(dir);
-  if (!root) {
-    notes.push(`  skip ${dir} (not present in this checkout)`);
+  if (!existsSync(mod)) {
+    where("src/" + pkg + "/security_headers.py is missing (no CSP on this service)");
     continue;
   }
-  checkedAny = true;
+  const src = readFileSync(mod, "utf8");
 
-  const modulePath = join(root, rel.module);
-  const appPath = join(root, rel.app);
-  if (!existsSync(appPath)) {
-    check(`${dir}: ${rel.app} exists`, false, "application entrypoint missing");
-    continue;
-  }
-
-  const mod = readFileSync(modulePath, "utf8");
-  const app = readFileSync(appPath, "utf8");
-
-  // 1. The app must actually install the middleware.
-  check(
-    `${dir}: main.py imports install_security_headers`,
-    /from\s+\S+\.security_headers\s+import\s+install_security_headers/.test(app),
-  );
-  check(
-    `${dir}: main.py calls install_security_headers(app, public_base_url=...)`,
-    /install_security_headers\(\s*app\s*,\s*public_base_url\s*=/.test(app),
-    "middleware defined but never attached would ship zero headers",
-  );
-
-  // 2. CSP directives.
-  const cspBlock = mod.slice(mod.indexOf("CSP = "), mod.indexOf("STATIC_HEADERS"));
+  // --- CSP directives -------------------------------------------------------
+  // Pull the directive literals out of the CSP list. Each entry is a quoted
+  // python string; f-strings are included (style-src/font-src embed the CDN).
+  const cspBlock = src.split(/^CSP\s*=/m)[1]?.split(/^\)\s*$/m)[0] ?? "";
   if (!cspBlock) {
-    check(`${dir}: CSP literal found`, false);
+    where("no CSP definition found in security_headers.py");
     continue;
   }
-  for (const [directive, value] of Object.entries(REQUIRED_DIRECTIVES)) {
-    check(
-      `${dir}: CSP ${directive} ${value}`,
-      cspBlock.includes(`"${directive} ${value}"`),
-    );
-  }
-  check(`${dir}: CSP has no wildcard source`, !cspBlock.includes("*"));
-  check(`${dir}: CSP has no 'unsafe-eval'`, !cspBlock.includes("unsafe-eval"));
-
-  const scriptSrc = (cspBlock.match(/"script-src[^"]*"/) || [""])[0];
-  check(`${dir}: script-src present`, scriptSrc.length > 0);
-  check(
-    `${dir}: CSS CDN is not a script source`,
-    !scriptSrc.includes("cdn.jsdelivr.net") && !scriptSrc.includes("{CDN}"),
-    "allow-listing the CDN for scripts would reopen the XSS path",
-  );
-
-  // 3. Non-CSP headers.
-  for (const [header, value] of REQUIRED_HEADERS) {
-    const line = mod.match(new RegExp(`"${header}":\\s*"([^"]*)"`));
-    check(
-      `${dir}: ${header}${value ? ` = ${value}` : ""}`,
-      Boolean(line) && (value === null || line[1] === value),
-      line ? `got "${line[1]}"` : "header absent",
-    );
+  const directives = new Map();
+  for (const m of cspBlock.matchAll(/f?"([^"]+)"/g)) {
+    const raw = m[1].replace(/\{CDN\}/g, "https://cdn.jsdelivr.net").trim();
+    if (!raw || raw === "; ") continue;
+    const [name, ...rest] = raw.split(/\s+/);
+    directives.set(name, rest.join(" "));
   }
 
-  // 4. HSTS must be conditional on https, not unconditional (breaks local dev)
-  //    and not absent (needed in production).
-  check(
-    `${dir}: HSTS emitted only for https deployments`,
-    /if\s+https:\s*\n\s*response\.headers\["Strict-Transport-Security"\]/.test(mod),
-  );
+  for (const [name, expected] of Object.entries(REQUIRED_EXACT)) {
+    if (!directives.has(name)) {
+      where(`CSP is missing the ${name} directive`);
+    } else if (directives.get(name) !== expected) {
+      where(`CSP ${name} must be exactly "${expected}", found "${directives.get(name)}"`);
+    }
+  }
 
-  // 5. The middleware must set headers AFTER call_next, so downstream
-  //    responses (including error responses) are covered.
-  check(
-    `${dir}: headers applied to every response (after call_next)`,
-    /response\s*=\s*await\s+call_next\(request\)[\s\S]{0,200}apply_security_headers/.test(mod),
-  );
+  const scriptSrc = directives.get("script-src");
+  if (scriptSrc === undefined) {
+    where("CSP is missing script-src (falls back to default-src, but be explicit)");
+  } else {
+    if (/cdn\.|https?:\/\//.test(scriptSrc)) {
+      where(`CSP script-src must not trust a remote host: "${scriptSrc}"`);
+    }
+    if (/\bdata:/.test(scriptSrc)) {
+      where(`CSP script-src must not allow data: URIs: "${scriptSrc}"`);
+    }
+  }
+
+  // Whole-policy prohibitions.
+  const policy = [...directives].map(([k, v]) => `${k} ${v}`).join("; ");
+  if (/'unsafe-eval'/.test(policy)) {
+    where("CSP must not allow 'unsafe-eval'");
+  }
+  if (/(^|[\s;])\*([\s;]|$)/.test(policy) || /\s\*\./.test(policy)) {
+    where(`CSP must not contain a wildcard source: "${policy}"`);
+  }
+
+  // --- static headers -------------------------------------------------------
+  for (const [name, value] of Object.entries(REQUIRED_HEADERS)) {
+    const line = src.match(new RegExp(`^\\s*"${name}"\\s*:\\s*"([^"]*)"`, "m"));
+    if (!line) where(`STATIC_HEADERS is missing ${name}`);
+    else if (line[1] !== value) where(`${name} must be "${value}", found "${line[1]}"`);
+  }
+  if (!/^\s*"Permissions-Policy"\s*:/m.test(src)) {
+    where("STATIC_HEADERS is missing Permissions-Policy");
+  } else if (!/microphone=\(\)/.test(src)) {
+    where("Permissions-Policy must deny microphone=()");
+  }
+
+  // --- the headers must actually be applied --------------------------------
+  // Defining STATIC_HEADERS is worthless if nothing writes them onto the
+  // response, so require the apply function to loop over them and assign.
+  const applyBody = src.split(/def apply_security_headers\s*\(/)[1]?.split(/\ndef /)[0] ?? "";
+  if (!applyBody) {
+    where("no apply_security_headers() function");
+  } else {
+    if (!/for\s+\w+\s*,\s*\w+\s+in\s+STATIC_HEADERS\.items\(\)/.test(applyBody)) {
+      where("apply_security_headers must iterate STATIC_HEADERS.items()");
+    }
+    if (!/response\.headers\[[^\]]+\]\s*=/.test(applyBody)) {
+      where("apply_security_headers must assign onto response.headers");
+    }
+    if (!/Content-Security-Policy/.test(src)) {
+      where("Content-Security-Policy header is never set");
+    }
+    // HSTS must be conditional on https, never unconditional (it would poison
+    // local http development with a year-long browser pin).
+    if (!/if\s+https\s*:/.test(applyBody)) {
+      where("Strict-Transport-Security must be gated on `if https:`");
+    }
+    if (!/max-age=31536000/.test(src)) {
+      where("HSTS max-age must be at least one year (31536000)");
+    }
+  }
+
+  const installBody = src.split(/def install_security_headers\s*\(/)[1] ?? "";
+  if (!installBody) {
+    where("no install_security_headers() function");
+  } else {
+    if (!/@app\.middleware\("http"\)/.test(installBody)) {
+      where("install_security_headers must register an http middleware");
+    }
+    if (!/apply_security_headers\(/.test(installBody)) {
+      where("the middleware must call apply_security_headers");
+    }
+    if (!/startswith\("https"\)/.test(installBody)) {
+      where("install_security_headers must derive `https` from public_base_url");
+    }
+  }
+
+  // --- wired into the app ---------------------------------------------------
+  if (!existsSync(main)) {
+    where("main.py not found");
+    continue;
+  }
+  const mainSrc = readFileSync(main, "utf8");
+  if (!/from\s+[\w.]*security_headers\s+import\s+install_security_headers/.test(mainSrc)) {
+    where("main.py does not import install_security_headers");
+  }
+  if (!/install_security_headers\(\s*app\s*,/.test(mainSrc)) {
+    where("main.py never calls install_security_headers(app, ...)");
+  }
+  if (!/install_security_headers\(\s*app\s*,\s*public_base_url\s*=/.test(mainSrc)) {
+    where("install_security_headers must be passed public_base_url= so HSTS is correct");
+  }
 }
 
-if (!checkedAny) {
-  failures.push("  FAIL no voice service package found — guard would pass vacuously");
-}
-
-for (const n of notes) console.log(n);
-if (failures.length) {
-  console.error("\nSecurity header guard FAILED:\n" + failures.join("\n"));
+if (failures.length > 0) {
+  console.error("check-security-headers: FAIL");
+  for (const f of failures) console.error(`  - ${f}`);
   process.exit(1);
 }
-console.log("\nSecurity header guard OK");
+console.log(
+  `check-security-headers: OK (${packages.join(", ")}: CSP locks connect/media/object/base-uri, no wildcard or unsafe-eval, headers applied and wired into main.py)`
+);
