@@ -83,3 +83,29 @@ call audio and transcripts actually live.
 
 All commits are local to the agent runner; remote push is blocked by the unauthorised runner SSH
 key tracked in **BAS-216**. Ahead of `origin/main`: voice-phone 8, voice-telegram 8, voice-web 9.
+
+## BAS-217 follow-up (2026-09-23): `'unsafe-inline'` removed from `script-src`
+
+The recorded limitation above is now closed.
+
+- voice-web: the dashboard's inline `<script>` and `<style>` were extracted to
+  `src/voice_web/static/app.js` and `app.css`, mounted same-origin at `/static`
+  via `StaticFiles`. All inline `onclick`/`onsubmit`/`oninput` attributes are
+  gone: form and nav wiring uses `addEventListener`, and the dynamically
+  rendered call rows/pagers use `data-toggle` / `data-page-action` attributes
+  handled by two delegated document listeners (no data-derived code path).
+- voice-phone / voice-telegram no longer serve any dashboard HTML (the `/admin`
+  page route was removed when the dashboard consolidated into voice-web), so
+  their CSPs simply drop the directive.
+- CSP is now `script-src 'self'` in all three services. `style-src` keeps
+  `'unsafe-inline'` for Pico CSS component styles; that is not a script channel.
+
+Guards updated so this cannot regress:
+- `check-security-headers.mjs` (all three repos) now fails if `script-src`
+  contains `'unsafe-inline'`.
+- `check-admin-xss.mjs` (voice-web and the cross-repo copy in voice-phone) reads
+  `index.html` + `app.js` together and additionally asserts: no inline `<script>`
+  in the index, no inline `on*=` attributes in the index, no `on*=` attributes in
+  markup built by `app.js`, and that `app.js` is loaded from `/static`.
+- pytest: `script-src` pinned to exactly `'self'`; voice-web adds coverage that
+  the security headers are applied to `/static/*` responses too.
