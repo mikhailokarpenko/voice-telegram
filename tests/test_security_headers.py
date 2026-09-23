@@ -34,7 +34,12 @@ def _assert_headers(resp, *, https: bool) -> None:
     assert directives["media-src"] == "'self'"
     assert directives["form-action"] == "'self'"
     assert "cdn.jsdelivr.net" in directives["style-src"]
-    assert "cdn.jsdelivr.net" not in directives["script-src"]
+    # script-src is the one directive that must stay exactly this: 'self' plus the
+    # known inline-handler allowance. No remote host, no data:, no wildcard --
+    # each of those would hand a regressed escaper a loader back.
+    assert directives["script-src"] == "'self' 'unsafe-inline'"
+    assert "unsafe-eval" not in csp
+    assert "*" not in csp
     assert resp.headers["x-frame-options"] == "DENY"
     assert resp.headers["x-content-type-options"] == "nosniff"
     assert resp.headers["referrer-policy"] == "no-referrer"
@@ -65,3 +70,11 @@ def test_hsts_only_on_https_deployments() -> None:
 def test_csp_has_no_wildcard_or_unsafe_eval() -> None:
     assert "*" not in CSP
     assert "unsafe-eval" not in CSP
+
+
+def test_headers_cover_unmatched_routes() -> None:
+    # 404s are generated inside Starlette, below the route handlers. A payload
+    # can trigger them, so they must carry the policy too.
+    resp = _client("http://testserver").get("/definitely-not-a-route")
+    assert resp.status_code == 404
+    _assert_headers(resp, https=False)
