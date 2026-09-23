@@ -79,3 +79,34 @@ constant.
   sandbox this run, so those tests were **not** executed here; they run in CI.
 - Removing `'unsafe-inline'` from `script-src`, which needs the inline handlers moved out of the
   dashboard HTML first. Worth doing; it is a separate change with real regression risk.
+
+## Addendum — concurrent-agent collision, and the two mutants that escaped
+
+Mid-run another agent wrote its own `check-security-headers.mjs` over mine in all three repos (a
+multi-repo variant with per-assertion `ok`/`FAIL` output). Its CSP-directive assertions were fine,
+but it was **green against the two mutants that disable the protection completely**:
+
+| mutant | concurrent guard | this guard |
+|---|---|---|
+| body of `apply_security_headers` deleted (headers computed, never written) | **ESCAPED** | caught |
+| `@app.middleware("http")` registration removed (module intact, never installed) | **ESCAPED** | caught |
+
+Both ship a service with zero security headers while every directive assertion still passes. Same
+failure shape as the disabled-validator escape in `check-admin-config.mjs`: plenty of assertions
+about a constant, none about whether the constant is ever *used*. The mutation-verified version was
+restored and committed in all three repos.
+
+That collision also surfaced a real bug, not just a guard quality issue: **voice-web's `create_app`
+never called `install_security_headers`**. The module and its tests were in the tree; the middleware
+was never attached, so voice-web served no CSP at all. Fixed in `110a94f`. This is precisely the
+class of defect the wiring assertions exist to catch, and it was live in the repo — the argument for
+asserting wiring over constants is not hypothetical here.
+
+## Verification status
+
+- All three repos: `check-security-headers.mjs`, `check-admin-config.mjs`, and (phone/web)
+  `check-admin-xss.mjs` exit 0 at their current HEAD.
+- `check-security-headers.mjs` skips absent siblings, so a single-repo CI checkout still passes
+  (verified by copying voice-telegram alone into a scratch dir and running it).
+- Python tests not run: no interpreter in this sandbox. They run in the `tests` CI job.
+- All commits in all three repos are **unpushed** (see BAS-216).
