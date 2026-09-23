@@ -11,9 +11,11 @@ be a full admin takeover. These headers cap the blast radius:
   plugin and ``<base>`` hijack tricks; ``frame-ancestors 'none'`` and
   ``X-Frame-Options: DENY`` block clickjacking of the admin controls;
   ``form-action 'self'`` stops credential-posting forms.
-* The dashboards use inline ``<script>``/``<style>`` and inline event handlers,
-  so ``script-src``/``style-src`` must allow ``'unsafe-inline'`` today. That is
-  a deliberate, recorded limitation: the exfiltration channels are still shut.
+* This service no longer serves a dashboard HTML page (the unified dashboard
+  lives in voice-web, which since BAS-217 loads its script from a same-origin
+  ``/static/app.js``), so ``script-src`` is ``'self'`` with no
+  ``'unsafe-inline'``. ``style-src`` keeps ``'unsafe-inline'`` for the Pico CSS
+  component styles; that is not a script-execution channel.
 * Stylesheets come from the pinned jsDelivr Pico CSS, allow-listed in
   ``style-src``/``font-src`` only -- not in ``script-src``.
 
@@ -32,7 +34,7 @@ CDN = "https://cdn.jsdelivr.net"
 CSP = "; ".join(
     [
         "default-src 'self'",
-        "script-src 'self' 'unsafe-inline'",
+        "script-src 'self'",
         f"style-src 'self' 'unsafe-inline' {CDN}",
         f"font-src 'self' data: {CDN}",
         "img-src 'self' data:",

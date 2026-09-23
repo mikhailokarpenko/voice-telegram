@@ -108,6 +108,9 @@ for (const pkg of packages) {
   if (scriptSrc === undefined) {
     where("CSP is missing script-src (falls back to default-src, but be explicit)");
   } else {
+    if (/'unsafe-inline'/.test(scriptSrc)) {
+      where(`CSP script-src must not allow 'unsafe-inline' (BAS-217): "${scriptSrc}"`);
+    }
     if (/cdn\.|https?:\/\//.test(scriptSrc)) {
       where(`CSP script-src must not trust a remote host: "${scriptSrc}"`);
     }

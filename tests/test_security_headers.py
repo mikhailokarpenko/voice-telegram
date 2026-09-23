@@ -34,10 +34,10 @@ def _assert_headers(resp, *, https: bool) -> None:
     assert directives["media-src"] == "'self'"
     assert directives["form-action"] == "'self'"
     assert "cdn.jsdelivr.net" in directives["style-src"]
-    # script-src is the one directive that must stay exactly this: 'self' plus the
-    # known inline-handler allowance. No remote host, no data:, no wildcard --
-    # each of those would hand a regressed escaper a loader back.
-    assert directives["script-src"] == "'self' 'unsafe-inline'"
+    # BAS-217: no inline script is served by this service, so script-src is
+    # exactly 'self'. No 'unsafe-inline', no remote host, no data:, no wildcard
+    # -- each of those would hand a regressed escaper a loader back.
+    assert directives["script-src"] == "'self'"
     assert "unsafe-eval" not in csp
     assert "*" not in csp
     assert resp.headers["x-frame-options"] == "DENY"
