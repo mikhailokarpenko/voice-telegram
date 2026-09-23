@@ -101,6 +101,20 @@ for (const target of targets) {
   if (!/require_admin_credentials/.test(src)) {
     fail('missing require_admin_credentials validator');
   }
+
+  // The decorator must be attached to the validator itself. A renamed or
+  // detached validator (e.g. `def _disabled_require_admin_credentials`, or a
+  // @model_validator left on some unrelated method) leaves production booting
+  // with no admin credentials while the two independent substring checks above
+  // still pass -- that mutant escaped this guard until it was mutation-tested.
+  if (!/@model_validator\(mode="after"\)\s*\n\s*def require_admin_credentials\s*\(/.test(src)) {
+    fail('@model_validator(mode="after") must decorate def require_admin_credentials directly');
+  }
+  // ...and it must actually raise, not just compute a list of missing vars.
+  const body = src.split(/def require_admin_credentials\s*\(/)[1] ?? '';
+  if (!/raise\s+ValueError/.test(body.split(/\n    @|\n    def /)[0] ?? '')) {
+    fail('require_admin_credentials must raise ValueError when required admin settings are missing');
+  }
   for (const needle of ['ADMIN_PASSWORD', 'ADMIN_JWT_SECRET', 'MIN_ADMIN_JWT_SECRET_LENGTH']) {
     if (!src.includes(needle)) fail(`validator does not reference ${needle}`);
   }
