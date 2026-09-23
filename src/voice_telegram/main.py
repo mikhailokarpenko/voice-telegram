@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from voice_telegram.admin.routes import router as admin_router
 from voice_telegram.config import Settings, get_settings
 from voice_telegram.database import Database
+from voice_telegram.security_headers import install_security_headers
 from voice_telegram.telegram.client import TelegramVoiceClient
 
 
@@ -31,6 +32,7 @@ def create_app(settings: Settings | None = None, *, start_telegram: bool = True)
         await database.close()
 
     app = FastAPI(title="Telegram Voice Agent", version="0.1.0", lifespan=lifespan)
+    install_security_headers(app, public_base_url=resolved_settings.public_base_url)
     app.state.settings = resolved_settings
     app.include_router(admin_router)
 

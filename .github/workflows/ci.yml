@@ -17,6 +17,8 @@ jobs:
       # Static guard: no Python/deps needed.
       - name: Admin config guard (no generated admin secrets; prod fails fast)
         run: node scripts/check-admin-config.mjs
+      - name: Security response headers guard (CSP/frame-ancestors defence-in-depth)
+        run: node scripts/check-security-headers.mjs
 
   tests:
     name: Lint + tests
