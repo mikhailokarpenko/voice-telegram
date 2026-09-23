@@ -1,9 +1,10 @@
-import secrets
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+MIN_ADMIN_JWT_SECRET_LENGTH = 32
 
 
 class Settings(BaseSettings):
@@ -17,7 +18,7 @@ class Settings(BaseSettings):
     )
     litellm_base_url: str = "http://litellm:4000"
     litellm_api_key: SecretStr = SecretStr("")
-    litellm_realtime_model: Literal["litellm/realtime-main"] = "litellm/realtime-main"
+    litellm_realtime_model: Literal["litellm/realtime-xai"] = "litellm/realtime-xai"
     openai_voice: str = "marin"
     agent_name: str = "Captain Blackbeard"
     agent_company: str = ""
@@ -31,11 +32,34 @@ class Settings(BaseSettings):
     telegram_api_id: int = 0
     telegram_api_hash: SecretStr = SecretStr("")
     telegram_phone: str = ""
+    # No generated defaults: a per-process random JWT secret silently invalidates
+    # every admin session on restart and breaks auth across replicas, while looking
+    # like a configured secret. Both must be supplied explicitly (enforced below).
     admin_password: SecretStr = SecretStr("")
-    admin_jwt_secret: str = secrets.token_urlsafe(32)
+    admin_jwt_secret: str = ""
     max_call_seconds: int = 1800
     vad_threshold: float = 0.5
     silence_duration_ms: int = 500
+
+    @model_validator(mode="after")
+    def require_admin_credentials(self) -> "Settings":
+        if self.environment != "production":
+            return self
+        missing = []
+        if not self.admin_password.get_secret_value():
+            missing.append("ADMIN_PASSWORD")
+        if not self.admin_jwt_secret:
+            missing.append("ADMIN_JWT_SECRET")
+        if missing:
+            raise ValueError(
+                "Missing required admin settings in production: " + ", ".join(missing)
+            )
+        if len(self.admin_jwt_secret) < MIN_ADMIN_JWT_SECRET_LENGTH:
+            raise ValueError(
+                "ADMIN_JWT_SECRET must be at least "
+                f"{MIN_ADMIN_JWT_SECRET_LENGTH} characters in production"
+            )
+        return self
 
 
 @lru_cache
