@@ -53,3 +53,38 @@ Deployments must set `ADMIN_JWT_SECRET` to a stable, shared value across
 replicas before rolling with `ENVIRONMENT=production`, otherwise startup now
 fails fast (intended). Existing admin sessions are invalidated once on the
 first deploy that pins the secret.
+
+## Guard mutation audit (2026-09-23, Gilfoyle)
+
+The guard was passing against a mutant it should have caught. Renaming the
+validator to `def _disabled_require_admin_credentials` left
+`check-admin-config.mjs` green in **all three repos**: the two checks were
+independent substring tests (`@model_validator(mode="after")` present
+*somewhere*, `require_admin_credentials` present *somewhere*), so neither
+noticed they were no longer attached to each other. A guard that cannot see a
+disabled validator is decorative.
+
+Added two assertions to all three guards:
+1. `@model_validator(mode="after")` must *directly decorate*
+   `def require_admin_credentials(` (adjacency, not co-presence).
+2. The validator body must contain `raise ValueError` — a validator that
+   computes `missing` and returns `self` fails fast nowhere.
+
+Mutation results after the fix (each mutant applied to the real config.py, then
+reverted; baseline green before and after):
+
+| mutant | voice-phone | voice-telegram | voice-web |
+|---|---|---|---|
+| `admin_jwt_secret` back to `secrets.token_urlsafe(32)` | caught | caught | caught |
+| validator renamed `_disabled_require_admin_credentials` | caught | caught | caught |
+| `raise ValueError` -> non-raising assignment in validator | caught | caught | caught |
+
+Method note: my first `raise`-removal mutant used a perl regex that silently
+matched nothing, so the guard "passed" against an unmodified file — a vacuous
+mutant, the same trap as a vacuous assertion. The table above is from a
+mutation verified to have changed the file first.
+
+Location note: `voice-phone/docs/` is root-owned on this runner (uid 0) and I
+am uid 1001, so the voice-phone copy of this audit lives in
+`voice-phone/scripts/ADMIN-CONFIG-GUARD-AUDIT.md` instead of appended to
+`docs/admin-config-hardening.md`.
