@@ -105,3 +105,67 @@ def test_spoofed_x_forwarded_for_cannot_rotate_the_throttle_bucket() -> None:
     assert 429 in codes, "rotating X-Forwarded-For bypassed the per-client throttle"
     assert codes.index(429) <= 5
 
+
+class _PeerAs:
+    """Force the ASGI scope's client address, simulating the TCP peer IP.
+
+    TestClient always reports 127.0.0.1 (or "testclient") as the peer, so without
+    this the proxy-trust boundary cannot be exercised for a non-loopback peer.
+    """
+
+    def __init__(self, app: object, host: str) -> None:
+        self.app = app
+        self.host = host
+
+    async def __call__(self, scope, receive, send):  # type: ignore[no-untyped-def]
+        if scope["type"] != "lifespan":
+            scope = dict(scope)
+            scope["client"] = (self.host, 12345)
+        return await self.app(scope, receive, send)  # type: ignore[operator]
+
+
+@pytest.mark.parametrize("peer", ["172.20.0.3", "10.1.2.3", "192.168.1.7", "203.0.113.9"])
+def test_private_range_peer_cannot_rotate_the_throttle_bucket(peer: str) -> None:
+    """A co-resident container must not be trusted to set X-Forwarded-For.
+
+    The first fix pinned proxy trust to loopback + the whole RFC1918/ULA space.
+    But this service shares its Docker networks with every other container on
+    the host, so any of them -- or an SSRF pivot that lands inside those ranges
+    -- is inside 172.16.0.0/12 and rotates X-Forwarded-For freely: the
+    per-client bucket stayed attacker-chosen. Measured against the pre-fix trust
+    list, peer 172.20.0.3: 12 guesses with rotating XFF -> 12x401, 0x429.
+
+    The shipped default is loopback-only; deployments name the real proxy via
+    the TRUSTED_PROXY_IPS env var.
+    """
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    from voice_telegram.main import TRUSTED_PROXY_IPS
+
+    app = ProxyHeadersMiddleware(create_app(_settings(), start_telegram=False), trusted_hosts=TRUSTED_PROXY_IPS)
+    client = TestClient(_PeerAs(app, peer))
+    codes = [
+        client.post(
+            "/api/admin/login",
+            json={"password": "wrong"},
+            headers={"X-Forwarded-For": f"203.0.113.{i}"},
+        ).status_code
+        for i in range(12)
+    ]
+    assert 429 in codes, (
+        f"peer {peer} rotated X-Forwarded-For past the per-client throttle "
+        f"(trust list {TRUSTED_PROXY_IPS})"
+    )
+
+
+def test_wildcard_trusted_proxy_ips_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """TRUSTED_PROXY_IPS=* at deploy time must fail fast, not silently reopen the bypass."""
+    from voice_telegram.main import TRUSTED_PROXY_IPS, resolve_trusted_proxy_ips
+
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "*")
+    with pytest.raises(ValueError):
+        resolve_trusted_proxy_ips()
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "172.20.0.5")
+    assert resolve_trusted_proxy_ips() == "172.20.0.5"
+    monkeypatch.delenv("TRUSTED_PROXY_IPS")
+    assert resolve_trusted_proxy_ips() == TRUSTED_PROXY_IPS

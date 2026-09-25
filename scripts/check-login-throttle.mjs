@@ -140,35 +140,82 @@ assert(cap && /global_max_failures\s*=/.test(cap),
 // ---- deployment: the XFF trust boundary ---------------------------------
 // The per-client bucket is keyed on request.client.host, which uvicorn's
 // ProxyHeadersMiddleware overwrites from X-Forwarded-For when the peer is
-// trusted. With --forwarded-allow-ips=* EVERY peer is trusted, so an
-// unauthenticated attacker rotates X-Forwarded-For and gets a fresh bucket per
-// guess: the per-client half of the throttle is void and only the global cap
-// remains. Verified empirically (40 guesses, 0 lockouts) before this guard
-// existed. So: proxy-header trust must be pinned to specific addresses.
+// trusted. Two ways that goes wrong, both measured against this app:
+//   * --forwarded-allow-ips=*  -> EVERY peer is trusted, any caller rotates
+//     X-Forwarded-For and gets a fresh bucket per guess (40 guesses, 0 lockouts).
+//   * a broad private-range trust list (10/8, 172.16/12, 192.168/16, fd00::/8)
+//     -> every co-resident container on the shared Docker networks, and any
+//     SSRF pivot inside them, is "the proxy" and rotates the bucket just the
+//     same (peer 172.20.0.3: 12 guesses, 0 lockouts, 2026-09-25).
+// So the shipped default must be loopback-only, and the real proxy address is
+// supplied per-deployment via the TRUSTED_PROXY_IPS env var.
 {
   const files = ["src/voice_telegram/main.py", "Dockerfile", "compose.yaml"];
   let sawAny = false;
+  const seen = new Set();
+  const BROAD = /(^|,)\s*(0\.0\.0\.0\/0|::\/0|10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|fd00::)/i;
   for (const rel of files) {
     let text;
     try { text = readFileSync(join(root, rel), "utf8"); } catch { continue; }
-    const hits = [...text.matchAll(/forwarded[-_]allow[-_]ips\s*[=:]\s*("?)([^"',\s\]]*(?:,[^"'\s\]]*)*)\1/gi)];
+    const hits = [...text.matchAll(/forwarded[-_]allow[-_]ips\s*[=:]\s*\\?("?)([^"',\s\]]*(?:,[^"'\s\]]*)*)\1/gi)];
     for (const m of hits) {
       sawAny = true;
-      let value = m[2].trim().replace(/[,)\]]+$/, "");
-      // Resolve one level of indirection: `forwarded_allow_ips=TRUSTED_PROXY_IPS`
-      // with `TRUSTED_PROXY_IPS = "*"` is the same vulnerability, so follow the
-      // constant instead of blessing the identifier.
-      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
-        const decl = new RegExp("^\\s*" + value + "\\s*(?::[^=]+)?=\\s*[\"']([^\"']*)[\"']", "m").exec(text);
+      let value = m[2].trim().replace(/\\/g, "").replace(/^"|"$/g, "").replace(/[,)\]]+$/, "");
+      // Shell default form: --forwarded-allow-ips="${TRUSTED_PROXY_IPS:-127.0.0.1,::1}"
+      const shell = /^\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}$/.exec(value.replace(/^\\?"|\\?"$/g, ""));
+      if (shell) {
+        assert(shell[1] === "TRUSTED_PROXY_IPS",
+          `${rel}: --forwarded-allow-ips reads ${shell[1]}; the reviewed knob is TRUSTED_PROXY_IPS`);
+        assert(shell[2] !== undefined && shell[2].trim().length > 0,
+          `${rel}: --forwarded-allow-ips=\${${shell[1]}} has no shell default, so an unset env var leaves the trust list empty`);
+        value = (shell[2] || "").trim();
+      } else if (/^[A-Za-z_][A-Za-z0-9_]*(\(\)?)?$/.test(value)) {
+        // Resolve one level of indirection: `forwarded_allow_ips=TRUSTED_PROXY_IPS`
+        // (or the resolver that reads it) with a literal "*" is the same bug.
+        const name = value.replace(/\(\)?$/, "");
+        const sym = name === "resolve_trusted_proxy_ips" ? "TRUSTED_PROXY_IPS" : name;
+        const decl = new RegExp("^\\s*" + sym + "\\s*(?::[^=]+)?=\\s*[\"']([^\"']*)[\"']", "m").exec(text);
         assert(decl, `${rel}: --forwarded-allow-ips is set from \`${value}\`, whose literal value could not be resolved in this file`);
         if (!decl) continue;
         value = decl[1].trim();
       }
       assert(value !== "*" && value !== "'*'",
-        `${rel}: --forwarded-allow-ips=* trusts X-Forwarded-For from every peer, which lets an attacker rotate the login throttle's bucket key (pin it to the reverse-proxy addresses)`);
-      assert(value.length > 0,
-        `${rel}: --forwarded-allow-ips is empty`);
+        `${rel}: --forwarded-allow-ips=* trusts X-Forwarded-For from every peer, which lets an attacker rotate the login throttle's bucket key (pin it to the reverse-proxy address)`);
+      assert(value.length > 0, `${rel}: --forwarded-allow-ips is empty`);
+      assert(!BROAD.test(value),
+        `${rel}: the shipped proxy-trust default (${value}) covers a whole private/any range; every co-resident container is then trusted to set X-Forwarded-For and can rotate the throttle bucket. Ship loopback-only and set the proxy address via TRUSTED_PROXY_IPS.`);
+      seen.add(value);
     }
+  }
+  assert(seen.size <= 1,
+    "deployment: proxy-header trust defaults disagree between files: " + [...seen].join(" vs "));
+  {
+    const py = readFileSync(join(root, "src/voice_telegram/main.py"), "utf8");
+    const m = /^TRUSTED_PROXY_IPS\s*=\s*"([^"]*)"/m.exec(py);
+    assert(m, `${"src/voice_telegram/main.py"}: TRUSTED_PROXY_IPS constant is gone (the throttle regression test imports it)`);
+    if (m) {
+      assert(m[1] !== "*" && m[1].length > 0, `${"src/voice_telegram/main.py"}: TRUSTED_PROXY_IPS must not be '*' or empty`);
+      assert(!BROAD.test(m[1]),
+        `${"src/voice_telegram/main.py"}: TRUSTED_PROXY_IPS default (${m[1]}) covers a whole private/any range -- ship loopback-only`);
+      for (const v of seen) {
+        assert(v === m[1],
+          `deployment: the --forwarded-allow-ips default (${v}) disagrees with TRUSTED_PROXY_IPS (${m[1]}) in ${"src/voice_telegram/main.py"}`);
+      }
+    }
+    // The env override must refuse a wildcard, otherwise TRUSTED_PROXY_IPS=* at
+    // deploy time reintroduces exactly the bypass this guard exists for.
+    const resolver = pyBlock(stripComments(py), "def", "resolve_trusted_proxy_ips");
+    assert(resolver, `${"src/voice_telegram/main.py"}: resolve_trusted_proxy_ips() is gone -- the env override is unvalidated`);
+    if (resolver) {
+      assert(/"\*"\s+in\s+resolved/.test(resolver) || /resolved\s*==\s*"\*"/.test(resolver),
+        `${"src/voice_telegram/main.py"}: resolve_trusted_proxy_ips() no longer rejects a wildcard TRUSTED_PROXY_IPS`);
+      assert(/raise ValueError/.test(resolver),
+        `${"src/voice_telegram/main.py"}: resolve_trusted_proxy_ips() no longer raises on a wildcard trust list`);
+      assert(/os\.environ/.test(resolver),
+        `${"src/voice_telegram/main.py"}: resolve_trusted_proxy_ips() no longer reads the TRUSTED_PROXY_IPS env var`);
+    }
+    assert(/^resolve_trusted_proxy_ips\(\)\s*$/m.test(stripComments(py)),
+      `${"src/voice_telegram/main.py"}: the import-time resolve_trusted_proxy_ips() fail-fast call was removed`);
   }
   assert(sawAny,
     "deployment: no --forwarded-allow-ips setting found in " + files.join(", ") +
@@ -183,6 +230,33 @@ assert(/def test_spoofed_x_forwarded_for_cannot_rotate_the_throttle_bucket\b/.te
     "tests/test_admin.py: the XFF test no longer runs against the deployed TRUSTED_PROXY_IPS trust list");
   assert(xff && /X-Forwarded-For/.test(xff) && /429/.test(xff),
     "tests/test_admin.py: the XFF test no longer asserts a 429 under a rotating X-Forwarded-For");
+}
+
+// The loopback-only default is only meaningful if a test proves a NON-loopback
+// private-range peer (a co-resident container / SSRF pivot) cannot rotate the
+// bucket, and that a wildcard override is refused at deploy time.
+{
+  const priv = pyBlock(tests, "def", "test_private_range_peer_cannot_rotate_the_throttle_bucket");
+  assert(priv, "tests/test_admin.py: the private-range peer regression test was removed (the loopback-only default is then unproven)");
+  if (priv) {
+    assert(/TRUSTED_PROXY_IPS/.test(priv),
+      "tests/test_admin.py: the private-range peer test no longer runs against the deployed TRUSTED_PROXY_IPS trust list");
+    assert(/X-Forwarded-For/.test(priv) && /429/.test(priv),
+      "tests/test_admin.py: the private-range peer test no longer asserts a 429 under a rotating X-Forwarded-For");
+  }
+  // The peers it is parametrised over live in the decorator, above the block.
+  const params = /@pytest\.mark\.parametrize\(\s*"peer"\s*,\s*\[([^\]]*)\]/.exec(tests);
+  assert(params, "tests/test_admin.py: the private-range peer test is no longer parametrised over peer addresses");
+  if (params) {
+    for (const needle of ["172.", "10.", "192.168."]) {
+      assert(params[1].includes(needle),
+        `tests/test_admin.py: the private-range peer test no longer exercises a ${needle}x peer -- exactly the range the old trust list blessed`);
+    }
+  }
+  const wild = pyBlock(tests, "def", "test_wildcard_trusted_proxy_ips_is_rejected");
+  assert(wild, "tests/test_admin.py: the wildcard TRUSTED_PROXY_IPS rejection test was removed");
+  assert(wild && /resolve_trusted_proxy_ips/.test(wild) && /raises\(ValueError\)/.test(wild),
+    "tests/test_admin.py: the wildcard test no longer asserts resolve_trusted_proxy_ips() raises on '*'");
 }
 
 if (failures.length) {
