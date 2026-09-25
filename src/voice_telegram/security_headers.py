@@ -16,8 +16,12 @@ be a full admin takeover. These headers cap the blast radius:
   ``/static/app.js``), so ``script-src`` is ``'self'`` with no
   ``'unsafe-inline'``. ``style-src`` likewise drops ``'unsafe-inline'``:
   this service serves no HTML, so no inline style is needed.
-* Stylesheets come from the pinned jsDelivr Pico CSS, allow-listed in
-  ``style-src``/``font-src`` only -- not in ``script-src``.
+* Every stylesheet and font is served same-origin from ``/static`` (the Pico
+  CSS build is vendored, not fetched from jsDelivr), so ``style-src`` and
+  ``font-src`` are ``'self'`` with no third-party origin at all. A CDN in
+  ``style-src`` is a supply-chain write into the authenticated admin origin
+  (CSS can exfiltrate DOM content via attribute selectors + ``url()``), so no
+  remote host is allow-listed anywhere in the policy.
 
 ``Strict-Transport-Security`` is only emitted when the service is deployed on
 HTTPS, so local HTTP development is unaffected.
@@ -29,14 +33,12 @@ from starlette.requests import Request
 from starlette.responses import Response
 from starlette.types import ASGIApp
 
-CDN = "https://cdn.jsdelivr.net"
-
 CSP = "; ".join(
     [
         "default-src 'self'",
         "script-src 'self'",
-        f"style-src 'self' {CDN}",
-        f"font-src 'self' data: {CDN}",
+        "style-src 'self'",
+        "font-src 'self' data:",
         "img-src 'self' data:",
         "media-src 'self'",
         "connect-src 'self'",

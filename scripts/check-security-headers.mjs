@@ -19,9 +19,13 @@
 //     .py (inline HTMLResponse) shipped under src/ for
 //     inline <script> blocks and inline on*= handlers -- markup that is dead
 //     under the CSP and whose usual "fix" is to put 'unsafe-inline' back.
-//     style-src keeps 'unsafe-inline' for Pico CSS component styles; that is not
-//     a script-execution channel. 'unsafe-eval', a wildcard host, or the CSS CDN
-//     in script-src stay hard failures.
+//   * Since BAS-219 no directive may name a remote origin: the Pico CSS build
+//     is vendored under /static, so style-src/font-src are same-origin. A CDN
+//     in style-src is a supply-chain write into the authenticated admin origin
+//     (CSS can exfiltrate DOM content and overlay the admin controls), and the
+//     CDN response carried no Subresource Integrity. The served-markup sweep
+//     below also fails on any third-party src=/href= subresource.
+//     'unsafe-eval' and wildcard hosts stay hard failures.
 //
 // The guard is static (node-only, no Python/deps) so it runs in the `guards` CI
 // job on every push; the pytest suite (tests/test_security_headers.py) covers
@@ -63,6 +67,13 @@ const REQUIRED_EXACT = {
   "base-uri": "'none'",
   "frame-ancestors": "'none'",
   "form-action": "'self'",
+  // BAS-219: no third-party origin anywhere in the policy. The Pico CSS build
+  // is vendored under /static, so style/font sources are same-origin. A CDN in
+  // style-src is a silent supply-chain write into the authenticated admin
+  // origin: CSS alone can exfiltrate DOM content (attribute selectors driving
+  // url() fetches) and can reposition/overlay the admin controls.
+  "style-src": "'self'",
+  "font-src": "'self' data:",
 };
 
 const REQUIRED_HEADERS = {
@@ -137,6 +148,16 @@ for (const pkg of packages) {
   }
   if (/(^|[\s;])\*([\s;]|$)/.test(policy) || /\s\*\./.test(policy)) {
     where(`CSP must not contain a wildcard source: "${policy}"`);
+  }
+  // BAS-219: no remote origin in any directive. Assets are vendored; a host
+  // added back here re-opens a third-party write into the admin origin.
+  const remote = [...directives].filter(([, v]) => /https?:\/\//.test(v));
+  if (remote.length > 0) {
+    where(
+      `CSP must not allow any remote origin (BAS-219); vendor the asset under /static instead: ${remote
+        .map(([k, v]) => `${k} ${v}`)
+        .join("; ")}`
+    );
   }
 
   // --- static headers -------------------------------------------------------
@@ -248,6 +269,13 @@ for (const pkg of packages) {
     }
     if (/\son[a-z]+\s*=\s*["']/i.test(html)) {
       fail(`${rel}: inline on*= event-handler attribute is dead under script-src 'self' (BAS-217); wire it with addEventListener in a served .js`);
+    }
+    // BAS-219: served markup must not load a subresource from a third party.
+    // Under the tightened CSP a remote <link>/<script>/<img> is blocked at
+    // runtime, and the tempting "fix" is to allow-list the host again.
+    for (const m of html.matchAll(/\b(?:src|href)\s*=\s*["'](https?:\/\/[^"']+)["']/gi)) {
+      const url = m[1];
+      fail(`${rel}: loads a third-party subresource ${url} (BAS-219); vendor it under /static and keep the CSP free of remote origins`);
     }
   }
 }
