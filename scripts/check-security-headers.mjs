@@ -14,7 +14,7 @@
 //     the admin controls; `object-src`/`base-uri 'none'` kill plugin and <base>
 //     hijack tricks; `form-action 'self'` stops credential-posting forms.
 //   * The dashboards still use inline <script>/<style> and inline handlers, so
-//     script-src/style-src must allow 'unsafe-inline' today. That is a recorded
+//     neither script-src nor style-src may allow 'unsafe-inline'. That is a recorded
 //     limitation, NOT a licence to also allow 'unsafe-eval', a wildcard host,
 //     or the CSS CDN in script-src -- each of those would reopen a channel this
 //     guard is here to keep closed. Those are asserted as hard failures.
@@ -117,6 +117,13 @@ for (const pkg of packages) {
     if (/\bdata:/.test(scriptSrc)) {
       where(`CSP script-src must not allow data: URIs: "${scriptSrc}"`);
     }
+  }
+
+  const styleSrc = directives.get("style-src");
+  if (styleSrc === undefined) {
+    where("CSP is missing style-src");
+  } else if (/'unsafe-inline'/.test(styleSrc)) {
+    where(`CSP style-src must not allow 'unsafe-inline': "${styleSrc}"`);
   }
 
   // Whole-policy prohibitions.

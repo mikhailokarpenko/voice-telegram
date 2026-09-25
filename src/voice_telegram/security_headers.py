@@ -14,8 +14,8 @@ be a full admin takeover. These headers cap the blast radius:
 * This service no longer serves a dashboard HTML page (the unified dashboard
   lives in voice-web, which since BAS-217 loads its script from a same-origin
   ``/static/app.js``), so ``script-src`` is ``'self'`` with no
-  ``'unsafe-inline'``. ``style-src`` keeps ``'unsafe-inline'`` for the Pico CSS
-  component styles; that is not a script-execution channel.
+  ``'unsafe-inline'``. ``style-src`` likewise drops ``'unsafe-inline'``:
+  this service serves no HTML, so no inline style is needed.
 * Stylesheets come from the pinned jsDelivr Pico CSS, allow-listed in
   ``style-src``/``font-src`` only -- not in ``script-src``.
 
@@ -35,7 +35,7 @@ CSP = "; ".join(
     [
         "default-src 'self'",
         "script-src 'self'",
-        f"style-src 'self' 'unsafe-inline' {CDN}",
+        f"style-src 'self' {CDN}",
         f"font-src 'self' data: {CDN}",
         "img-src 'self' data:",
         "media-src 'self'",

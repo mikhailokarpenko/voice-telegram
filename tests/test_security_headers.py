@@ -33,7 +33,8 @@ def _assert_headers(resp, *, https: bool) -> None:
     assert directives["connect-src"] == "'self'"
     assert directives["media-src"] == "'self'"
     assert directives["form-action"] == "'self'"
-    assert "cdn.jsdelivr.net" in directives["style-src"]
+    assert directives["style-src"] == "'self' https://cdn.jsdelivr.net"
+    assert "unsafe-inline" not in csp
     # BAS-217: no inline script is served by this service, so script-src is
     # exactly 'self'. No 'unsafe-inline', no remote host, no data:, no wildcard
     # -- each of those would hand a regressed escaper a loader back.
