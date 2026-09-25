@@ -15,7 +15,8 @@
 //     hijack tricks; `form-action 'self'` stops credential-posting forms.
 //   * Since BAS-217 the dashboard script is served from a same-origin
 //     /static/app.js, so script-src is exactly 'self': no 'unsafe-inline'. This
-//     guard asserts that, and also sweeps every .html shipped under src/ for
+//     guard asserts that, and also sweeps every .html and markup-bearing
+//     .py (inline HTMLResponse) shipped under src/ for
 //     inline <script> blocks and inline on*= handlers -- markup that is dead
 //     under the CSP and whose usual "fix" is to put 'unsafe-inline' back.
 //     style-src keeps 'unsafe-inline' for Pico CSS component styles; that is not
@@ -210,7 +211,8 @@ for (const pkg of packages) {
 
 // --- served markup must stay inline-free (BAS-217) ---------------------------
 // script-src 'self' is only honest if no HTML shipped by this service carries an
-// inline <script> or an inline on*= handler. A dashboard page re-added (or a
+// inline <script> or an inline on*= handler -- whether it lives in a .html
+// file or in an inline HTMLResponse string. A dashboard page re-added (or a
 // dead one left in the tree and re-wired to a route) would execute nothing under
 // the CSP -- and the likely "fix" is to put 'unsafe-inline' back. Fail here
 // instead, at the file that introduced the inline code.
@@ -220,7 +222,7 @@ function htmlFiles(dir) {
     if (e.name === "__pycache__" || e.name === "node_modules") continue;
     const p = join(dir, e.name);
     if (e.isDirectory()) out.push(...htmlFiles(p));
-    else if (e.name.endsWith(".html")) out.push(p);
+    else if (e.name.endsWith(".html") || e.name.endsWith(".py")) out.push(p);
   }
   return out;
 }
@@ -229,7 +231,18 @@ for (const pkg of packages) {
   if (!existsSync(pkgRoot)) continue;
   for (const file of htmlFiles(pkgRoot)) {
     const rel = file.slice(repoRoot.length + 1);
-    const html = readFileSync(file, "utf8");
+    let html = readFileSync(file, "utf8");
+    if (file.endsWith(".py")) {
+      // A dashboard re-added as an inline HTMLResponse("""...<script>...""")
+      // ships exactly the same dead markup as a .html file, so .py sources that
+      // actually serve HTML are swept too. Only the triple-quoted literals are
+      // inspected -- prose in docstrings and comments that merely *mentions*
+      // <script> must not fail the guard.
+      if (!/HTMLResponse|text\/html/.test(html)) continue;
+      const literals = html.match(/"""[\s\S]*?"""|'''[\s\S]*?'''/g) || [];
+      html = literals.filter((lit) => /<(?:html|body|div|table|button|script)\b/i.test(lit)).join("\n");
+      if (html === "") continue;
+    }
     if (/<script(?![^>]*\ssrc=)[^>]*>/i.test(html)) {
       fail(`${rel}: inline <script> block is dead under script-src 'self' (BAS-217); move it to a same-origin .js served from /static, or delete the file if unused`);
     }
