@@ -37,6 +37,7 @@ dev = [
 packages = ["src/voice_telegram"]
 
 [tool.pytest.ini_options]
+pythonpath = ["src"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
