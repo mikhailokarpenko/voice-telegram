@@ -77,3 +77,31 @@ def test_login_throttle_window_expiry_and_global_cap() -> None:
         fresh.record_failure(f"host-{i}", t0)
     with pytest.raises(HTTPException):
         fresh.check("host-new", t0)
+
+
+def test_spoofed_x_forwarded_for_cannot_rotate_the_throttle_bucket() -> None:
+    """The deployed proxy-header trust must not let a client pick its own bucket.
+
+    uvicorn ProxyHeadersMiddleware overwrites scope["client"] from
+    X-Forwarded-For when the peer is trusted. These apps ship behind a reverse
+    proxy, so proxy headers ARE honoured -- but trust must be pinned to the
+    proxy addresses. With --forwarded-allow-ips=* (what the images used to ship)
+    any unauthenticated caller rotates X-Forwarded-For and gets a fresh
+    per-client bucket for every guess, so only the global cap remains.
+    """
+    from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
+
+    from voice_telegram.main import TRUSTED_PROXY_IPS
+
+    client = TestClient(ProxyHeadersMiddleware(create_app(_settings(), start_telegram=False), trusted_hosts=TRUSTED_PROXY_IPS))
+    codes = [
+        client.post(
+            "/api/admin/login",
+            json={"password": "wrong"},
+            headers={"X-Forwarded-For": f"203.0.113.{i}"},
+        ).status_code
+        for i in range(10)
+    ]
+    assert 429 in codes, "rotating X-Forwarded-For bypassed the per-client throttle"
+    assert codes.index(429) <= 5
+

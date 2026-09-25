@@ -137,6 +137,54 @@ const cap = pyBlock(tests, "def", "test_login_throttle_window_expiry_and_global_
 assert(cap && /global_max_failures\s*=/.test(cap),
   "tests/test_admin.py: the global-cap test no longer exercises global_max_failures");
 
+// ---- deployment: the XFF trust boundary ---------------------------------
+// The per-client bucket is keyed on request.client.host, which uvicorn's
+// ProxyHeadersMiddleware overwrites from X-Forwarded-For when the peer is
+// trusted. With --forwarded-allow-ips=* EVERY peer is trusted, so an
+// unauthenticated attacker rotates X-Forwarded-For and gets a fresh bucket per
+// guess: the per-client half of the throttle is void and only the global cap
+// remains. Verified empirically (40 guesses, 0 lockouts) before this guard
+// existed. So: proxy-header trust must be pinned to specific addresses.
+{
+  const files = ["src/voice_telegram/main.py", "Dockerfile", "compose.yaml"];
+  let sawAny = false;
+  for (const rel of files) {
+    let text;
+    try { text = readFileSync(join(root, rel), "utf8"); } catch { continue; }
+    const hits = [...text.matchAll(/forwarded[-_]allow[-_]ips\s*[=:]\s*("?)([^"',\s\]]*(?:,[^"'\s\]]*)*)\1/gi)];
+    for (const m of hits) {
+      sawAny = true;
+      let value = m[2].trim().replace(/[,)\]]+$/, "");
+      // Resolve one level of indirection: `forwarded_allow_ips=TRUSTED_PROXY_IPS`
+      // with `TRUSTED_PROXY_IPS = "*"` is the same vulnerability, so follow the
+      // constant instead of blessing the identifier.
+      if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
+        const decl = new RegExp("^\\s*" + value + "\\s*(?::[^=]+)?=\\s*[\"']([^\"']*)[\"']", "m").exec(text);
+        assert(decl, `${rel}: --forwarded-allow-ips is set from \`${value}\`, whose literal value could not be resolved in this file`);
+        if (!decl) continue;
+        value = decl[1].trim();
+      }
+      assert(value !== "*" && value !== "'*'",
+        `${rel}: --forwarded-allow-ips=* trusts X-Forwarded-For from every peer, which lets an attacker rotate the login throttle's bucket key (pin it to the reverse-proxy addresses)`);
+      assert(value.length > 0,
+        `${rel}: --forwarded-allow-ips is empty`);
+    }
+  }
+  assert(sawAny,
+    "deployment: no --forwarded-allow-ips setting found in " + files.join(", ") +
+    " -- if proxy-header handling moved, re-point this guard at it");
+}
+
+assert(/def test_spoofed_x_forwarded_for_cannot_rotate_the_throttle_bucket\b/.test(tests),
+  "tests/test_admin.py: the X-Forwarded-For bucket-rotation regression test was removed");
+{
+  const xff = pyBlock(tests, "def", "test_spoofed_x_forwarded_for_cannot_rotate_the_throttle_bucket");
+  assert(xff && /TRUSTED_PROXY_IPS/.test(xff),
+    "tests/test_admin.py: the XFF test no longer runs against the deployed TRUSTED_PROXY_IPS trust list");
+  assert(xff && /X-Forwarded-For/.test(xff) && /429/.test(xff),
+    "tests/test_admin.py: the XFF test no longer asserts a 429 under a rotating X-Forwarded-For");
+}
+
 if (failures.length) {
   console.error("check-login-throttle: FAIL");
   for (const f of failures) console.error("  - " + f);

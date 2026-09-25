@@ -12,6 +12,10 @@ from voice_telegram.database import Database
 from voice_telegram.security_headers import install_security_headers
 from voice_telegram.telegram.client import TelegramVoiceClient
 
+# Reverse-proxy addresses whose X-Forwarded-For is trusted. See the comment in
+# main() -- this must never become "*".
+TRUSTED_PROXY_IPS = "127.0.0.1,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,fd00::/8"
+
 
 def create_app(settings: Settings | None = None, *, start_telegram: bool = True) -> FastAPI:
     resolved_settings = settings or get_settings()
@@ -58,7 +62,16 @@ def main() -> None:
         host="0.0.0.0",
         port=8000,
         proxy_headers=True,
-        forwarded_allow_ips="*",
+        # Never "*". With "*", uvicorn's ProxyHeadersMiddleware rewrites
+        # scope["client"] from the FIRST X-Forwarded-For entry supplied by ANY
+        # peer, so an unauthenticated caller rotates that header and gets a
+        # fresh per-client bucket on every admin /login attempt -- the
+        # brute-force throttle's per-client half is void and only the global
+        # cap remains (~14k guesses/day against one shared password). Trust is
+        # pinned to loopback + RFC1918/ULA, where the container-network reverse
+        # proxy actually connects from. Guarded by
+        # scripts/check-login-throttle.mjs.
+        forwarded_allow_ips=TRUSTED_PROXY_IPS,
         log_level=settings.log_level.lower(),
     )
 
