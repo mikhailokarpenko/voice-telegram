@@ -13,11 +13,14 @@
 //     `frame-ancestors 'none'` + `X-Frame-Options: DENY` block clickjacking of
 //     the admin controls; `object-src`/`base-uri 'none'` kill plugin and <base>
 //     hijack tricks; `form-action 'self'` stops credential-posting forms.
-//   * The dashboards still use inline <script>/<style> and inline handlers, so
-//     neither script-src nor style-src may allow 'unsafe-inline'. That is a recorded
-//     limitation, NOT a licence to also allow 'unsafe-eval', a wildcard host,
-//     or the CSS CDN in script-src -- each of those would reopen a channel this
-//     guard is here to keep closed. Those are asserted as hard failures.
+//   * Since BAS-217 the dashboard script is served from a same-origin
+//     /static/app.js, so script-src is exactly 'self': no 'unsafe-inline'. This
+//     guard asserts that, and also sweeps every .html shipped under src/ for
+//     inline <script> blocks and inline on*= handlers -- markup that is dead
+//     under the CSP and whose usual "fix" is to put 'unsafe-inline' back.
+//     style-src keeps 'unsafe-inline' for Pico CSS component styles; that is not
+//     a script-execution channel. 'unsafe-eval', a wildcard host, or the CSS CDN
+//     in script-src stay hard failures.
 //
 // The guard is static (node-only, no Python/deps) so it runs in the `guards` CI
 // job on every push; the pytest suite (tests/test_security_headers.py) covers
@@ -202,6 +205,37 @@ for (const pkg of packages) {
   }
   if (!/install_security_headers\(\s*app\s*,\s*public_base_url\s*=/.test(mainSrc)) {
     where("install_security_headers must be passed public_base_url= so HSTS is correct");
+  }
+}
+
+// --- served markup must stay inline-free (BAS-217) ---------------------------
+// script-src 'self' is only honest if no HTML shipped by this service carries an
+// inline <script> or an inline on*= handler. A dashboard page re-added (or a
+// dead one left in the tree and re-wired to a route) would execute nothing under
+// the CSP -- and the likely "fix" is to put 'unsafe-inline' back. Fail here
+// instead, at the file that introduced the inline code.
+function htmlFiles(dir) {
+  const out = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.name === "__pycache__" || e.name === "node_modules") continue;
+    const p = join(dir, e.name);
+    if (e.isDirectory()) out.push(...htmlFiles(p));
+    else if (e.name.endsWith(".html")) out.push(p);
+  }
+  return out;
+}
+for (const pkg of packages) {
+  const pkgRoot = join(srcRoot, pkg);
+  if (!existsSync(pkgRoot)) continue;
+  for (const file of htmlFiles(pkgRoot)) {
+    const rel = file.slice(repoRoot.length + 1);
+    const html = readFileSync(file, "utf8");
+    if (/<script(?![^>]*\ssrc=)[^>]*>/i.test(html)) {
+      fail(`${rel}: inline <script> block is dead under script-src 'self' (BAS-217); move it to a same-origin .js served from /static, or delete the file if unused`);
+    }
+    if (/\son[a-z]+\s*=\s*["']/i.test(html)) {
+      fail(`${rel}: inline on*= event-handler attribute is dead under script-src 'self' (BAS-217); wire it with addEventListener in a served .js`);
+    }
   }
 }
 

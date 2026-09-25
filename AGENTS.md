@@ -79,3 +79,12 @@ the production fail-fast validator is present, and that `.env.example` documents
 both variables. It runs in CI (`.github/workflows/ci.yml`) and needs Node only —
 no Python or dependency install. When `voice-phone` is not present in the
 checkout it is skipped; `voice-telegram` itself is always enforced.
+
+`node scripts/check-security-headers.mjs` asserts the BAS-213 response headers
+and the BAS-217 CSP: `script-src` is exactly `'self'` (no `'unsafe-inline'`, no
+remote host, no `data:`), plus `connect-src`/`media-src`/`object-src`/`base-uri`/
+`frame-ancestors`/`form-action` pinned. It also sweeps every `.html` shipped
+under `src/` and fails on an inline `<script>` block or an inline `on*=`
+handler — that markup is dead under `script-src 'self'`, and the usual "fix" is
+to put `'unsafe-inline'` back. Serve dashboard behaviour from a same-origin
+`/static/app.js` and wire handlers with `addEventListener`.
