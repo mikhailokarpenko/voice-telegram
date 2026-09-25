@@ -95,7 +95,10 @@ for (const target of targets) {
   }
 
   // Fail-fast validator.
-  if (!/@model_validator\(mode="after"\)/.test(src)) {
+  // NOTE: decorator assertions are anchored with ^ (multiline). An unanchored
+  // /@model_validator/ is satisfied by a COMMENTED-OUT decorator, which disables
+  // the validator entirely while the guard stays green. Do not relax the anchors.
+  if (!/^[ \t]*@model_validator\(mode="after"\)[ \t]*$/m.test(src)) {
     fail('config.py must have a model_validator enforcing admin credentials');
   }
   if (!/require_admin_credentials/.test(src)) {
@@ -107,12 +110,16 @@ for (const target of targets) {
   // @model_validator left on some unrelated method) leaves production booting
   // with no admin credentials while the two independent substring checks above
   // still pass -- that mutant escaped this guard until it was mutation-tested.
-  if (!/@model_validator\(mode="after"\)\s*\n\s*def require_admin_credentials\s*\(/.test(src)) {
+  if (!/^[ \t]*@model_validator\(mode="after"\)[ \t]*\n[ \t]*def require_admin_credentials\s*\(/m.test(src)) {
     fail('@model_validator(mode="after") must decorate def require_admin_credentials directly');
+  }
+  // The validator definition itself must be live code, not commented out.
+  if (!/^[ \t]*def require_admin_credentials\s*\(/m.test(src)) {
+    fail("def require_admin_credentials must be live code, not commented out");
   }
   // ...and it must actually raise, not just compute a list of missing vars.
   const body = src.split(/def require_admin_credentials\s*\(/)[1] ?? '';
-  if (!/raise\s+ValueError/.test(body.split(/\n    @|\n    def /)[0] ?? '')) {
+  if (!/^[ \t]*(if [^\n]*:\s*\n[ \t]*)?raise\s+ValueError/m.test(body.split(/\n    @|\n    def /)[0] ?? '')) {
     fail('require_admin_credentials must raise ValueError when required admin settings are missing');
   }
   for (const needle of ['ADMIN_PASSWORD', 'ADMIN_JWT_SECRET', 'MIN_ADMIN_JWT_SECRET_LENGTH']) {
