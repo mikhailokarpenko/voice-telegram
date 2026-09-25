@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from voice_telegram.admin.auth import create_token, decode_token, verify_password
+from voice_telegram.admin.auth import LoginThrottle, create_token, decode_token, verify_password
 from voice_telegram.admin.repository import AgentConfigRepository
 from voice_telegram.api.dependencies import get_db_session
 from voice_telegram.calls.models import TelegramCall
@@ -92,8 +92,16 @@ async def _require_auth(
 @router.post("/login")
 async def login(body: LoginRequest, request: Request) -> Response:
     settings = _get_settings(request)
+    # Single shared password: without this the endpoint is an unlimited online
+    # guessing oracle. Throttle before the comparison so a locked bucket costs
+    # the attacker a 429, not a password test.
+    client = request.client.host if request.client else "unknown"
+    throttle: LoginThrottle = request.app.state.login_throttle
+    throttle.check(client)
     if not verify_password(body.password, settings):
+        throttle.record_failure(client)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid password")
+    throttle.record_success(client)
     response = Response(content='{"status":"ok"}', media_type="application/json")
     response.set_cookie(
         "admin_token",

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager, suppress
 import uvicorn
 from fastapi import FastAPI
 
+from voice_telegram.admin.auth import LoginThrottle
 from voice_telegram.admin.routes import router as admin_router
 from voice_telegram.config import Settings, get_settings
 from voice_telegram.database import Database
@@ -34,6 +35,10 @@ def create_app(settings: Settings | None = None, *, start_telegram: bool = True)
     app = FastAPI(title="Telegram Voice Agent", version="0.1.0", lifespan=lifespan)
     install_security_headers(app, public_base_url=resolved_settings.public_base_url)
     app.state.settings = resolved_settings
+    # Brute-force throttle for the single shared admin password. Installed here,
+    # not in lifespan, so it exists for any caller that builds the app without
+    # running startup.
+    app.state.login_throttle = LoginThrottle()
     app.include_router(admin_router)
 
     @app.get("/health/ready")

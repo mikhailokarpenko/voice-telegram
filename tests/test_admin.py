@@ -35,3 +35,45 @@ def test_admin_login_and_page() -> None:
     assert client.post("/api/admin/login", json={"password": "testpass"}).status_code == 200
     assert client.get("/api/admin/me").json()["user"] == "admin"
     assert any(voice["id"] == "marin" for voice in client.get("/api/admin/voices").json())
+
+
+def test_login_throttles_brute_force_and_clears_on_success() -> None:
+    app = create_app(_settings(), start_telegram=False)
+    client = TestClient(app)
+    for _ in range(5):
+        assert client.post("/api/admin/login", json={"password": "wrong"}).status_code == 401
+    locked = client.post("/api/admin/login", json={"password": "wrong"})
+    assert locked.status_code == 429
+    assert locked.headers["retry-after"] == "300"
+    # Locked out even with the *correct* password: the throttle runs before the
+    # comparison, so a lockout is not a password-test oracle.
+    assert client.post("/api/admin/login", json={"password": "testpass"}).status_code == 429
+
+    app.state.login_throttle._failures.clear()
+    app.state.login_throttle._global.clear()
+    assert client.post("/api/admin/login", json={"password": "wrong"}).status_code == 401
+    assert client.post("/api/admin/login", json={"password": "testpass"}).status_code == 200
+    assert app.state.login_throttle._failures == {}
+
+
+def test_login_throttle_window_expiry_and_global_cap() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    from voice_telegram.admin.auth import LoginThrottle
+
+    throttle = LoginThrottle(max_failures=2, window_seconds=60, global_max_failures=3)
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    throttle.record_failure("a", t0)
+    throttle.record_failure("a", t0)
+    with pytest.raises(HTTPException) as exc:
+        throttle.check("a", t0)
+    assert exc.value.status_code == 429
+    # Old failures age out of the fixed window.
+    throttle.check("a", t0 + timedelta(seconds=61))
+
+    # Distributed spray across rotating client addresses still hits the global cap.
+    fresh = LoginThrottle(max_failures=99, window_seconds=60, global_max_failures=3)
+    for i in range(3):
+        fresh.record_failure(f"host-{i}", t0)
+    with pytest.raises(HTTPException):
+        fresh.check("host-new", t0)
