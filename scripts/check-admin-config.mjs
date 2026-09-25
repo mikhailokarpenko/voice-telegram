@@ -24,6 +24,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+const REQUIRED_ADMIN_VARS = ["ADMIN_PASSWORD", "ADMIN_JWT_SECRET"];
+
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..');
 // Layout A (monorepo/voice-suite checkout): <voiceRoot>/voice-telegram/scripts/...
@@ -124,6 +126,32 @@ for (const target of targets) {
   }
   for (const needle of ['ADMIN_PASSWORD', 'ADMIN_JWT_SECRET', 'MIN_ADMIN_JWT_SECRET_LENGTH']) {
     if (!src.includes(needle)) fail(`validator does not reference ${needle}`);
+  }
+
+  // MUTATION-TESTED ADDITION (2026-09-25): two semantic mutants escaped the
+  // checks above, both of which leave production booting with no admin
+  // credentials while every assertion above still passes:
+  //   (a) an unconditional `return self` as the validator's first statement,
+  //   (b) deleting a `missing.append("VAR")` line so that VAR is no longer
+  //       required (the bare name still appears elsewhere, e.g. in the
+  //       min-length error message, so `src.includes(needle)` stays true).
+  // Both are caught by tests/test_config.py, but the Node guards run in a
+  // separate, dependency-free CI job that gates before Python is installed.
+  {
+    const vbody = (src.split(/def require_admin_credentials\s*\(/)[1] ?? '').split(/\n    @|\n    def /)[0] ?? '';
+    const firstStmt = vbody
+      .split('\n')
+      .slice(1)
+      .map((l) => l.trim())
+      .find((l) => l && !l.startsWith('#') && !l.startsWith('"""'));
+    if (firstStmt === 'return self') {
+      fail('require_admin_credentials starts with an unconditional `return self` (validator is a no-op)');
+    }
+    for (const v of REQUIRED_ADMIN_VARS) {
+      if (!new RegExp(`missing\\.append\\(["']${v}["']\\)`).test(vbody)) {
+        fail(`require_admin_credentials must append ${v} to the missing list when it is unset`);
+      }
+    }
   }
   if (!/environment\s*!=\s*"production"/.test(src)) {
     fail('validator must gate the hard requirement on environment == production');
