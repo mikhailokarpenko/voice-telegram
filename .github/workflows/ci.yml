@@ -19,6 +19,8 @@ jobs:
         run: node scripts/check-admin-config.mjs
       - name: Guard - admin login brute-force throttle (incl. X-Forwarded-For bucket rotation)
         run: node scripts/check-login-throttle.mjs
+      - name: Admin session guard (JWT verification, cookie flags, per-route authorisation)
+        run: node scripts/check-admin-session.mjs
       - name: Security response headers guard (CSP/frame-ancestors defence-in-depth)
         run: node scripts/check-security-headers.mjs
       - name: CI wiring guard (every guard above must actually be executed)
