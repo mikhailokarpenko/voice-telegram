@@ -102,6 +102,7 @@ class TelegramVoiceClient:
         self._audio_fifo_fd: int | None = None
         self._call_record_id: uuid.UUID | None = None
         self._transcript: list[str] = []
+        self._max_call_task: asyncio.Task[None] | None = None
 
     # ------------------------------------------------------------------ #
     # Lifecycle                                                           #
@@ -195,6 +196,20 @@ class TelegramVoiceClient:
             await TelegramCallRepository(db_session).set_status(call, "in-progress")
             self._call_record_id = call.id
 
+        # Hard per-call duration budget. `max_call_seconds` is configurable via
+        # env, the agent_configs row and the admin API, but until BAS-230
+        # nothing in this service ever read it: a call that neither side hung up
+        # (silent caller, wedged pytgcalls stream, a provider socket that pings
+        # forever) ran until the process restarted, billing realtime minutes the
+        # whole time and holding the single-call slot so every later caller got
+        # nothing. voice-phone arms the same budget with asyncio.timeout around
+        # its bridge; this client is event-driven with no such scope, so the
+        # budget is a watchdog task that forces the normal hangup path.
+        max_seconds = (
+            active_config.max_call_seconds if active_config else self.settings.max_call_seconds
+        )
+        self._max_call_task = asyncio.create_task(self._enforce_max_call_seconds(max_seconds))
+
         try:
             self._audio_fifo.unlink(missing_ok=True)
             os.mkfifo(self._audio_fifo)
@@ -259,6 +274,25 @@ class TelegramVoiceClient:
         except Exception:
             log.exception("Failed to connect OpenAI bridge")
             await self._teardown_call()
+
+    async def _enforce_max_call_seconds(self, max_seconds: int) -> None:
+        """Hang up once the call exceeds its configured duration budget."""
+        if max_seconds <= 0:
+            return
+        try:
+            await asyncio.sleep(max_seconds)
+        except asyncio.CancelledError:
+            return
+        user_id = self._active_user_id
+        if user_id is None:
+            return
+        log.warning("Call from %s hit the %ss budget — hanging up", user_id, max_seconds)
+        if self.pytgcalls:
+            try:
+                await self.pytgcalls.leave_call(user_id)
+            except Exception:
+                log.exception("Error leaving call after duration budget")
+        await self._teardown_call()
 
     # ------------------------------------------------------------------ #
     # Audio pipeline: Telegram -> OpenAI                                   #
@@ -361,6 +395,20 @@ class TelegramVoiceClient:
                     await repo.save_transcript(call, self._transcript)
                     await repo.set_status(call, "completed")
             self._call_record_id = None
+
+        # The watchdog itself calls teardown; never cancel the running task.
+        current = asyncio.current_task()
+        if (
+            self._max_call_task
+            and self._max_call_task is not current
+            and not self._max_call_task.done()
+        ):
+            self._max_call_task.cancel()
+            try:
+                await self._max_call_task
+            except asyncio.CancelledError:
+                pass
+        self._max_call_task = None
 
         if self._audio_sender_task and not self._audio_sender_task.done():
             self._audio_sender_task.cancel()
