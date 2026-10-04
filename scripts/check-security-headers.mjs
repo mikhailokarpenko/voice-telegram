@@ -185,8 +185,11 @@ for (const pkg of packages) {
     if (!/response\.headers\[[^\]]+\]\s*=/.test(applyBody)) {
       where("apply_security_headers must assign onto response.headers");
     }
-    if (!/Content-Security-Policy/.test(src)) {
-      where("Content-Security-Policy header is never set");
+    // Assert the binding, not the mere presence of the string: this module's
+    // docstring names the header several times, so a substring search is
+    // satisfied by prose and would pass with the CSP computed and never sent.
+    if (!/^\s*"Content-Security-Policy"\s*:\s*CSP\s*,/m.test(src)) {
+      where("STATIC_HEADERS must map \"Content-Security-Policy\" to the CSP constant (computing CSP without emitting it is a silent no-op)");
     }
     // HSTS must be conditional on https, never unconditional (it would poison
     // local http development with a year-long browser pin).
