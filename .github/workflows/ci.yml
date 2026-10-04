@@ -25,6 +25,8 @@ jobs:
         run: node scripts/check-admin-xss.mjs
       - name: Call duration budget guard (max_call_seconds must actually hang calls up)
         run: node scripts/check-call-duration-budget.mjs
+      - name: Greeting config guard (greeting_style/custom_greeting must reach the caller)
+        run: node scripts/check-greeting-config.mjs
       - name: Security response headers guard (CSP/frame-ancestors defence-in-depth)
         run: node scripts/check-security-headers.mjs
       - name: CI wiring guard (every guard above must actually be executed)

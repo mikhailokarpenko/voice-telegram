@@ -50,6 +50,40 @@ def build_agent_instructions(agent_prompt: str) -> str:
     return f"{agent_prompt.strip()}\n\n{MULTILINGUAL_INSTRUCTION}"
 
 
+def build_opening_message(
+    *,
+    greeting_style: str,
+    custom_greeting: str,
+    intro_prompt: str,
+    agent_name: str,
+    agent_company: str,
+) -> str:
+    """Resolve the first thing the agent says.
+
+    `greeting_style` and `custom_greeting` exist as env settings, agent_configs
+    columns, validated admin-API fields and a voice-web dropdown. Until BAS-234
+    nothing in this service read either one: the opening was always
+    `intro_prompt`, so selecting "custom" in the dashboard and typing a greeting
+    changed a stored row and nothing else. Precedence here differs deliberately
+    from voice-phone: there `intro_prompt` is spoken over a separate Twilio
+    <Say> channel so the realtime opening is blanked, whereas this client has
+    only one channel, so an explicit custom greeting wins over it.
+
+    Never returns empty: the provider unconditionally sends the opening as a
+    conversation item, and an empty item makes the agent open with silence.
+    """
+    if greeting_style == "custom" and custom_greeting.strip():
+        return custom_greeting.strip()
+    if intro_prompt.strip():
+        return intro_prompt.strip()
+    style = (greeting_style or "casual").strip() or "casual"
+    return (
+        f"Greet the caller as {agent_name}"
+        + (f" from {agent_company}" if agent_company else "")
+        + f" in a {style} tone. Briefly ask how you can help."
+    )
+
+
 def append_transcript_turn(transcript: list[str], speaker: str, text: str) -> None:
     normalized = text.strip()
     if not normalized:
@@ -252,8 +286,28 @@ class TelegramVoiceClient:
                 instructions=build_agent_instructions(
                     active_config.agent_prompt if active_config else self.settings.agent_prompt
                 ),
-                opening_message=(
-                    active_config.intro_prompt if active_config else self.settings.intro_prompt
+                opening_message=build_opening_message(
+                    greeting_style=(
+                        active_config.greeting_style
+                        if active_config
+                        else self.settings.greeting_style
+                    ),
+                    custom_greeting=(
+                        active_config.custom_greeting
+                        if active_config
+                        else self.settings.custom_greeting
+                    ),
+                    intro_prompt=(
+                        active_config.intro_prompt if active_config else self.settings.intro_prompt
+                    ),
+                    agent_name=(
+                        active_config.agent_name if active_config else self.settings.agent_name
+                    ),
+                    agent_company=(
+                        active_config.agent_company
+                        if active_config
+                        else self.settings.agent_company
+                    ),
                 ),
                 voice=(active_config.openai_voice if active_config else self.settings.openai_voice),
                 vad_threshold=(
