@@ -7,6 +7,7 @@ AI response back to the caller.
 import asyncio
 import logging
 import os
+import shlex
 import uuid
 from collections import deque
 from pathlib import Path
@@ -37,6 +38,37 @@ from voice_telegram.config import Settings
 from voice_telegram.database import Database
 from voice_telegram.providers.base import EventType, RealtimeSession
 from voice_telegram.providers.bridge import RealtimeBridge
+
+MULTILINGUAL_INSTRUCTION = (
+    "Automatically detect the language spoken by the caller and respond naturally in the same "
+    "language. If the caller changes languages, switch to match them. Preserve the configured "
+    "persona and never translate unless asked."
+)
+
+
+def build_agent_instructions(agent_prompt: str) -> str:
+    return f"{agent_prompt.strip()}\n\n{MULTILINGUAL_INSTRUCTION}"
+
+
+def append_transcript_turn(transcript: list[str], speaker: str, text: str) -> None:
+    normalized = text.strip()
+    if not normalized:
+        return
+    line = f"{speaker}: {normalized}"
+    if transcript and transcript[-1].startswith(f"{speaker}: "):
+        transcript[-1] = line
+    else:
+        transcript.append(line)
+
+
+class LivePCMStream(MediaStream):
+    async def check_stream(self) -> None:
+        path = shlex.quote(str(self._audio_path or self._media_path))
+        self.microphone.path = (
+            f"ffmpeg -f s16le -ar 48000 -ac 2 -re -i {path} "
+            "-v quiet -f s16le -ac 2 -ar 48000 pipe:1"
+        )
+
 
 log = logging.getLogger(__name__)
 
@@ -112,9 +144,7 @@ class TelegramVoiceClient:
                 caller_id = phone_call.admin_id
                 call_id = phone_call.id
                 access_hash = phone_call.access_hash
-                log.info(
-                    "Incoming call from %s (call_id=%s)", caller_id, call_id
-                )
+                log.info("Incoming call from %s (call_id=%s)", caller_id, call_id)
                 await self._answer_call(caller_id, call_id, access_hash)
             elif isinstance(phone_call, PhoneCallDiscarded):
                 reason = getattr(phone_call, "reason", None)
@@ -170,17 +200,13 @@ class TelegramVoiceClient:
             os.mkfifo(self._audio_fifo)
             self._audio_fifo_fd = os.open(self._audio_fifo, os.O_RDWR)
             self._audio_sender_task = asyncio.create_task(self._audio_sender())
-
             await self.pytgcalls.play(
                 user_id,
-                MediaStream(
+                LivePCMStream(
                     str(self._audio_fifo),
                     audio_parameters=AudioParameters(bitrate=48000, channels=2),
                     audio_flags=MediaStream.Flags.REQUIRED,
                     video_flags=MediaStream.Flags.IGNORE,
-                    ffmpeg_parameters=(
-                        "--audio-start -f s16le -ar 48000 -ac 2 -re"
-                    ),
                 ),
                 config=CallConfig(timeout=30),
             )
@@ -193,16 +219,22 @@ class TelegramVoiceClient:
                 ),
             )
             log.info("Call answered for user %s", user_id)
-        except Exception:
+        except Exception as exc:
             log.exception("Failed to answer call from %s", user_id)
-            self._active_user_id = None
-            self._active_call_id = None
+            if self._call_record_id:
+                async for db_session in self.database.session():
+                    repo = TelegramCallRepository(db_session)
+                    call = await repo.get(self._call_record_id)
+                    if call:
+                        await repo.set_status(call, "failed", str(exc))
+                self._call_record_id = None
+            await self._teardown_call()
             return
 
         # Open the OpenAI Realtime bridge
         try:
             session = RealtimeSession(
-                instructions=(
+                instructions=build_agent_instructions(
                     active_config.agent_prompt if active_config else self.settings.agent_prompt
                 ),
                 opening_message=(
@@ -265,10 +297,10 @@ class TelegramVoiceClient:
                     self._outbound_frames.clear()
                 elif event.type == EventType.CALLER_TRANSCRIPT:
                     log.info("Caller said: %s", event.data)
-                    self._transcript.append(f"Caller: {event.data}")
+                    append_transcript_turn(self._transcript, "Caller", event.data)
                 elif event.type == EventType.AGENT_TRANSCRIPT:
                     log.info("Agent said: %s", event.data)
-                    self._transcript.append(f"Agent: {event.data}")
+                    append_transcript_turn(self._transcript, "Agent", event.data)
                 elif event.type == EventType.ERROR:
                     log.error("OpenAI error: %s", event.data)
         except asyncio.CancelledError:

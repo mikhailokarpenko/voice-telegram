@@ -92,3 +92,20 @@ Committed, **unpushed**: this run has no managed GitHub identity
 (`No managed GitHub identity is available for this run`). Same publication blocker as
 BAS-228. The repos are also root-owned in this sandbox; commits required
 `git -c safe.directory='*' -c user.useConfigOnly=false`.
+
+## Next tranche (follow-up work)
+
+The ten guards in `ci-wiring-harness-debt.json` need committed, re-runnable harnesses:
+
+- voice-phone: `check-admin-config`, `check-admin-xss`, `check-media-ws-prestart-bounds`, `check-security-headers`
+- voice-telegram: `check-admin-config`, `check-security-headers`
+- voice-web: `check-admin-config`, `check-admin-xss`, `check-recording-streaming`, `check-security-headers`
+
+Pattern to copy: `voice-phone/scripts/test-twilio-signature-guard-mutants.mjs`.
+Rules: each mutant removes exactly ONE real control; no-op mutants are reported and
+never counted as caught; the guard is re-run green on the restored tree. Remove the
+entry from `ci-wiring-harness-debt.json` as each lands — leaving a now-harnessed guard
+listed is itself a guard failure, by design.
+
+This could not be filed as a Paperclip issue: `POST /api/issues` returned 403
+`Route not allowed` on the run that produced this work (no `PAPERCLIP_TASK_ID`).
