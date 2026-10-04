@@ -57,6 +57,22 @@ if (cls) {
       "src/voice_telegram/admin/auth.py: the 429 no longer carries a Retry-After header");
     assert(/self\._prune\(self\._global/.test(check) && /self\._prune\(self\._failures/.test(check),
       "src/voice_telegram/admin/auth.py: check() no longer prunes both buckets to the window");
+
+    // A condition can be present and dead. `... and False`, `... or True`,
+    // `if False:` all keep every asserted substring above while making the
+    // lockout unreachable (measured escapes, 2026-10-04 mutation audit).
+    assert(!/\b(and|or)\s+(False|True)\b/.test(check) && !/\bif\s+(False|True)\s*:/.test(check),
+      "src/voice_telegram/admin/auth.py: check() contains a constant-neutralised branch (and False / or True / if False) -- the lockout is dead code");
+
+    // An early `return` above the lockout test makes check() a no-op while the
+    // whole body (and every substring above) survives for the grep to find.
+    const lockoutAt = check.search(/len\(stamps\)\s*>=\s*self\.max_failures/);
+    const earlyReturn = /^\s*(return\b|raise\s+SystemExit\b|pass\s*$)/m;
+    const head = lockoutAt > 0 ? check.slice(0, lockoutAt) : "";
+    // Strip the signature line before scanning, so `-> None:` is not a match.
+    const headBody = head.slice(head.indexOf("\n") + 1);
+    assert(lockoutAt > 0 && !earlyReturn.test(headBody),
+      "src/voice_telegram/admin/auth.py: check() returns before it evaluates the lockout condition -- the throttle never fires");
   }
 
   const prune = pyBlock(cls, "def", "_prune");
