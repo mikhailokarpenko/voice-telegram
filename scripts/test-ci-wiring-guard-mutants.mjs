@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const GUARD = join(root, "scripts", "check-ci-wiring.mjs");
 const CI = join(root, ".github", "workflows", "ci.yml");
+const SAMPLE_HARNESS = join(root, "scripts", "test-admin-config-guard-mutants.mjs");
 const DEBT = join(root, "scripts", "ci-wiring-harness-debt.json");
 
 function runGuard() {
@@ -126,6 +127,21 @@ const mutants = [
       j.unharnessed = [...j.unharnessed, "check-login-throttle.mjs"];
       return JSON.stringify(j, null, 2) + "\n";
     },
+  ],
+  [
+    "a mutation harness loses its MIN_MUTANTS_EXECUTED vacuity floor",
+    SAMPLE_HARNESS,
+    (t) => t.replace(/MIN_MUTANTS_EXECUTED/g, "MIN_MUTANTS_DECLARED_ELSEWHERE"),
+  ],
+  [
+    "a harness floor survives in a comment only (no numeric declaration)",
+    SAMPLE_HARNESS,
+    (t) => t.replace(/const MIN_MUTANTS_EXECUTED\s*=\s*\d+;/, "// const MIN_MUTANTS_EXECUTED = 3;"),
+  ],
+  [
+    "a harness can no longer exit non-zero",
+    SAMPLE_HARNESS,
+    (t) => t.replace(/process\.exit\(1\)/g, "process.exitCode = 0"),
   ],
 ];
 

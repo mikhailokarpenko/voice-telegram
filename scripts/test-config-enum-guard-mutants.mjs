@@ -192,6 +192,21 @@ try {
   writeFileSync(ROUTES, original);
 }
 
+// --- vacuity floor (ratchet) ----------------------------------------------
+// A harness whose mutant list is emptied -- or filtered to nothing by a stale
+// anchor -- reports "0 caught" and exits 0: green while proving nothing. The
+// floor counts mutants that ACTUALLY EXECUTED, so neither deleting entries nor
+// short-circuiting the loop slips past it. It may only be raised.
+const MIN_MUTANTS_EXECUTED = 25;
+const _executed = caught + escaped + noop;
+if (_executed < MIN_MUTANTS_EXECUTED) {
+  console.error(
+    `FAIL - vacuity floor: only ${_executed} mutants executed, but at least ${MIN_MUTANTS_EXECUTED} are required. ` +
+      "Mutants were removed or skipped; this audit understates the guard's blind spots.",
+  );
+  process.exit(1);
+}
+
 console.log(`\n${caught} caught, ${escaped} escaped, ${noop} no-op, ${mutants.length} total`);
 if (escaped || noop) process.exit(1);
 if (!runGuard()) {

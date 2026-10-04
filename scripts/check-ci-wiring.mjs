@@ -189,6 +189,28 @@ if (unharnessed.includes("check-ci-wiring.mjs")) {
   );
 }
 
+// --- every harness needs a vacuity floor -----------------------------------
+// A mutation harness whose mutant list is emptied (or filtered to nothing by a
+// stale anchor) prints "0 caught" and exits 0: green while proving nothing.
+// Each harness therefore has to declare MIN_MUTANTS_EXECUTED and compare it to
+// the number of mutants that actually ran. Without that, the "guards" CI job
+// can be silently hollowed out one harness at a time.
+for (const h of harnesses) {
+  const text = harnessText.get(h);
+  const declaresFloor = text
+    .split("\n")
+    .some((l) => /^\s*(const|let|var)\s+MIN_MUTANTS_EXECUTED\s*=\s*\d+\s*;/.test(l));
+  const comparesFloor = /MIN_MUTANTS_EXECUTED/.test(text.replace(/^\s*\/\/.*$/gm, "")) && declaresFloor;
+  if (!comparesFloor) {
+    failures.push(
+      `scripts/${h} declares no MIN_MUTANTS_EXECUTED vacuity floor; if its mutant list is emptied it would ` +
+        "still exit 0. Add a floor equal to the number of mutants that execute today.",
+    );
+  } else if (!/process\.exit\(1\)/.test(text)) {
+    failures.push(`scripts/${h} never exits non-zero; its result cannot fail CI.`);
+  }
+}
+
 // --- the Python half -------------------------------------------------------
 const testsDir = join(root, "tests");
 const modules = existsSync(testsDir)
