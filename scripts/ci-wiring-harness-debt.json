@@ -1,0 +1,7 @@
+{
+  "_comment": "Guards mutation-audited by hand (see the *-AUDIT.md files) but without a committed re-runnable harness. check-ci-wiring.mjs treats this as a ratchet: entries may only be removed. Adding a new guard without a harness is a hard failure.",
+  "unharnessed": [
+    "check-admin-config.mjs",
+    "check-security-headers.mjs"
+  ]
+}

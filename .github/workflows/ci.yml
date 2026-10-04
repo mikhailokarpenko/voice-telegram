@@ -21,12 +21,15 @@ jobs:
         run: node scripts/check-login-throttle.mjs
       - name: Security response headers guard (CSP/frame-ancestors defence-in-depth)
         run: node scripts/check-security-headers.mjs
+      - name: CI wiring guard (every guard above must actually be executed)
+        run: node scripts/check-ci-wiring.mjs
       # A guard that has never been shown red proves nothing. Each harness
       # mutates one real control out of the tree and requires the guard to
       # fail. It restores every file; git diff --exit-code proves it did.
       # The glob picks up every future harness automatically.
       - name: Mutation-audit the security guards
         run: |
+          set -e
           for f in scripts/test-*-guard-mutants.mjs; do
             echo "== $f"
             node "$f"

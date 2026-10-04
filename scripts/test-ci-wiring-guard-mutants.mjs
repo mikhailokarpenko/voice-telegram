@@ -1,0 +1,169 @@
+#!/usr/bin/env node
+// Mutation audit for scripts/check-ci-wiring.mjs.
+//
+// This guard asserts that CI executes the other guards. If it cannot go red,
+// it is the most expensive kind of decoration: it certifies the enforcement
+// layer. Each mutant below removes exactly one real piece of wiring from
+// .github/workflows/ci.yml (or from the harness-debt baseline) and the guard
+// must FAIL on it.
+//
+// A mutant that does not change any file is reported NO-OP and never counted
+// as caught, so a stale anchor cannot inflate the score. Every file is
+// restored and the baseline is re-checked green afterwards.
+//
+// Run: node scripts/test-ci-wiring-guard-mutants.mjs  (exit 0 = all caught)
+import { readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+const GUARD = join(root, "scripts", "check-ci-wiring.mjs");
+const CI = join(root, ".github", "workflows", "ci.yml");
+const DEBT = join(root, "scripts", "ci-wiring-harness-debt.json");
+
+function runGuard() {
+  try {
+    execFileSync(process.execPath, [GUARD], { cwd: root, stdio: "pipe" });
+    return { ok: true, out: "" };
+  } catch (e) {
+    return { ok: false, out: String(e.stdout ?? "") + String(e.stderr ?? "") };
+  }
+}
+
+const baseline = runGuard();
+if (!baseline.ok) {
+  console.error("BASELINE IS RED -- the mutation audit would be meaningless.\n" + baseline.out);
+  process.exit(1);
+}
+
+// [name, file, mutate(text) -> text]
+const mutants = [
+  [
+    "mutation-audit loop step deleted entirely",
+    CI,
+    (t) => t.replace(/\n      # A guard that has never[\s\S]*?git diff --exit-code\n/, "\n"),
+  ],
+  [
+    "`git diff --exit-code` removed (mutated control could survive the run)",
+    CI,
+    (t) => t.replace(/\n\s*git diff --exit-code/, ""),
+  ],
+  [
+    "`set -e` removed from the harness loop (red harness swallowed)",
+    CI,
+    (t) => t.replace(/\n(\s*)set -e\n/, "\n"),
+  ],
+  [
+    "one explicit guard step deleted",
+    CI,
+    (t) => t.replace(/\n      - name: [^\n]*\n        run: node scripts\/check-[^\n]*\n/, "\n"),
+  ],
+  [
+    "every explicit guard step deleted",
+    CI,
+    (t) => t.replace(/\n      - name: [^\n]*\n        run: node scripts\/check-[^\n]*(?=\n)/g, ""),
+  ],
+  [
+    "continue-on-error: true on the guards job",
+    CI,
+    (t) => t.replace(/(  guards:\n)/, "$1    continue-on-error: true\n"),
+  ],
+  [
+    "pull_request trigger removed",
+    CI,
+    (t) => t.replace(/\n  pull_request:\n/, "\n"),
+  ],
+  [
+    "push trigger removed",
+    CI,
+    (t) => t.replace(/\n  push:\n    branches: \[main\]\n/, "\n"),
+  ],
+  [
+    "actions/checkout removed from the guards job",
+    CI,
+    (t) => t.replace(/(  guards:[\s\S]*?)      - uses: actions\/checkout@v4\n/, "$1"),
+  ],
+  [
+    "pytest narrowed to a single module (other regression tests dropped)",
+    CI,
+    (t) => t.replace(/run: pytest -q$/m, "run: pytest -q tests/test_config.py"),
+  ],
+  [
+    "pytest step removed (Python half unexecuted)",
+    CI,
+    (t) => t.replace(/\n      - name: Pytest\n[\s\S]*?run: pytest[^\n]*\n/, "\n"),
+  ],
+  [
+    "harness-debt baseline widened to excuse a future unharnessed guard",
+    DEBT,
+    (t) => {
+      const j = JSON.parse(t);
+      j.unharnessed = [...j.unharnessed, "check-ci-wiring.mjs"];
+      return JSON.stringify(j, null, 2) + "\n";
+    },
+  ],
+  [
+    "harness-debt baseline emptied (accepted debt now unrecorded)",
+    DEBT,
+    (t) => {
+      const j = JSON.parse(t);
+      j.unharnessed = [];
+      return JSON.stringify(j, null, 2) + "\n";
+    },
+  ],
+  [
+    "harness-debt baseline lists a guard that already has a harness (stale excuse)",
+    DEBT,
+    (t) => {
+      const j = JSON.parse(t);
+      j.unharnessed = [...j.unharnessed, "check-login-throttle.mjs"];
+      return JSON.stringify(j, null, 2) + "\n";
+    },
+  ],
+];
+
+let caught = 0;
+let escaped = 0;
+let noop = 0;
+
+for (const [name, file, mutate] of mutants) {
+  const original = readFileSync(file, "utf8");
+  let mutated;
+  try {
+    mutated = mutate(original);
+  } catch (e) {
+    mutated = original;
+  }
+  if (mutated === original) {
+    console.log(`  NO-OP   ${name}  (mutation anchored on text that is not present; not counted)`);
+    noop += 1;
+    continue;
+  }
+  writeFileSync(file, mutated);
+  let res;
+  try {
+    res = runGuard();
+  } finally {
+    writeFileSync(file, original);
+  }
+  if (res.ok) {
+    console.log(`  ESCAPED ${name}`);
+    escaped += 1;
+  } else {
+    console.log(`  caught  ${name}`);
+    caught += 1;
+  }
+}
+
+const after = runGuard();
+if (!after.ok) {
+  console.error("\nTree not restored cleanly -- guard is red after the audit:\n" + after.out);
+  process.exit(1);
+}
+
+console.log(
+  `\nci-wiring guard mutation audit: ${caught} caught, ${escaped} escaped, ${noop} no-op ` +
+    `(of ${mutants.length} mutants)`,
+);
+if (escaped || noop) process.exit(1);
