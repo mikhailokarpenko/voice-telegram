@@ -29,6 +29,8 @@ jobs:
         run: node scripts/check-greeting-config.mjs
       - name: Security response headers guard (CSP/frame-ancestors defence-in-depth)
         run: node scripts/check-security-headers.mjs
+      - name: Config enum guard (dashboard-offered voice/greeting values must be allowlisted on write)
+        run: node scripts/check-config-enums.mjs
       - name: CI wiring guard (every guard above must actually be executed)
         run: node scripts/check-ci-wiring.mjs
       # A guard that has never been shown red proves nothing. Each harness

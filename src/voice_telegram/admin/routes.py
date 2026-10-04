@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,7 +39,16 @@ class LoginRequest(BaseModel):
     password: str
 
 
-class ConfigPayload(BaseModel):
+# See voice-phone's equivalent block (BAS-238). The dashboard renders Voice
+# from GET /voices and Greeting Style from a fixed <select>, but PUT /config
+# validated neither value beyond max_length=32, so an unknown voice was
+# accepted, echoed back as if applied, and only failed later when the realtime
+# session was opened mid-call.
+VOICE_IDS = frozenset(v["id"] for v in AVAILABLE_VOICES)
+GREETING_STYLES = frozenset({"casual", "formal", "friendly", "professional", "custom"})
+
+
+class ConfigFields(BaseModel):
     agent_name: str = Field(max_length=128)
     agent_company: str = Field(default="", max_length=128)
     agent_prompt: str
@@ -52,7 +61,38 @@ class ConfigPayload(BaseModel):
     silence_duration_ms: int = Field(default=500, ge=100, le=3000)
 
 
-class ConfigResponse(ConfigPayload):
+class ConfigPayload(ConfigFields):
+    """Inbound PUT /config body: enum-validated.
+
+    Validators are deliberately absent from ConfigResponse: a row persisted
+    before BAS-238 may hold an out-of-allowlist voice, and a strict read model
+    would make GET /config 500 so the operator could never see or correct it.
+    """
+
+    @field_validator("openai_voice")
+    @classmethod
+    def _known_voice(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in VOICE_IDS:
+            raise ValueError(
+                f"unknown voice {value!r}; must be one of: "
+                + ", ".join(sorted(VOICE_IDS))
+            )
+        return normalized
+
+    @field_validator("greeting_style")
+    @classmethod
+    def _known_greeting_style(cls, value: str) -> str:
+        normalized = value.strip().lower()
+        if normalized not in GREETING_STYLES:
+            raise ValueError(
+                f"unknown greeting style {value!r}; must be one of: "
+                + ", ".join(sorted(GREETING_STYLES))
+            )
+        return normalized
+
+
+class ConfigResponse(ConfigFields):
     id: str | None = None
     is_active: bool = True
     source: str = "defaults"
