@@ -124,6 +124,19 @@ for (const target of targets) {
   if (!/^[ \t]*(if [^\n]*:\s*\n[ \t]*)?raise\s+ValueError/m.test(body.split(/\n    @|\n    def /)[0] ?? '')) {
     fail('require_admin_credentials must raise ValueError when required admin settings are missing');
   }
+  // MUTATION-TESTED ADDITION (ported from voice-phone): the check above is
+  // satisfied by ANY raise in the validator -- including the admin_jwt_secret
+  // MIN-LENGTH raise, which is a different control. Deleting the
+  // `if missing: raise ValueError(...)` block therefore escaped: production
+  // booted with no ADMIN_PASSWORD and no ADMIN_JWT_SECRET at all, while the
+  // missing list was still built and then thrown away. Assert that the missing
+  // list is the thing enforced, not merely that some raise exists nearby.
+  {
+    const vbody = body.split(/\n    @|\n    def /)[0] ?? "";
+    if (!/^[ \t]*if\s+missing\s*:[ \t]*\n[ \t]*raise\s+ValueError\b/m.test(vbody)) {
+      fail("require_admin_credentials must enforce the missing list with an `if missing:` followed directly by `raise ValueError` (a raise elsewhere in the validator is a different control)");
+    }
+  }
   for (const needle of ['ADMIN_PASSWORD', 'ADMIN_JWT_SECRET', 'MIN_ADMIN_JWT_SECRET_LENGTH']) {
     if (!src.includes(needle)) fail(`validator does not reference ${needle}`);
   }
