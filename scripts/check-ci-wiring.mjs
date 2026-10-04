@@ -33,6 +33,7 @@ if (!existsSync(CI)) {
 // Shared libraries are imported, not executed; they are covered through the
 // guards that import them.
 const NOT_AN_ENTRYPOINT = new Set([
+  "lib-markup-sweep.mjs",
   "lib-py-blocks.mjs",
   "lib-html-sinks.mjs",
   "lib-workflow.mjs",
