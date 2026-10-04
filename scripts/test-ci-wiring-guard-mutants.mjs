@@ -111,6 +111,12 @@ const mutants = [
       j.unharnessed = [];
       return JSON.stringify(j, null, 2) + "\n";
     },
+    // Only meaningful while debt exists. Once the baseline is empty -- the goal
+    // state -- emptying it is a no-op, and a no-op must not be counted as a
+    // pass (that is the vacuity trap this whole workstream exists to catch) nor
+    // fail the build for succeeding. It retires itself instead, and comes back
+    // automatically the moment a new entry is accepted.
+    (t) => JSON.parse(t).unharnessed.length > 0,
   ],
   [
     "harness-debt baseline lists a guard that already has a harness (stale excuse)",
@@ -127,8 +133,12 @@ let caught = 0;
 let escaped = 0;
 let noop = 0;
 
-for (const [name, file, mutate] of mutants) {
+for (const [name, file, mutate, appliesWhen] of mutants) {
   const original = readFileSync(file, "utf8");
+  if (appliesWhen && !appliesWhen(original)) {
+    console.log(`  n/a     ${name}  (precondition no longer holds; mutant retired, not counted)`);
+    continue;
+  }
   let mutated;
   try {
     mutated = mutate(original);
