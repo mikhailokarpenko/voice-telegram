@@ -225,8 +225,19 @@ assert(cap && /global_max_failures\s*=/.test(cap),
     if (resolver) {
       assert(/"\*"\s+in\s+resolved/.test(resolver) || /resolved\s*==\s*"\*"/.test(resolver),
         `${"src/voice_telegram/main.py"}: resolve_trusted_proxy_ips() no longer rejects a wildcard TRUSTED_PROXY_IPS`);
+      assert(/if "\*" in resolved:\s*\n\s*raise ValueError\(/.test(resolver),
+        `src/voice_telegram/main.py: the wildcard branch of resolve_trusted_proxy_ips() no longer raises`);
       assert(/raise ValueError/.test(resolver),
         `${"src/voice_telegram/main.py"}: resolve_trusted_proxy_ips() no longer raises on a wildcard trust list`);
+      // Screening only for "*" left the deploy-time override able to re-bless a
+      // whole private range (TRUSTED_PROXY_IPS=172.16.0.0/12), which is the same
+      // bypass the loopback-only source default exists to prevent.
+      assert(/"\/"\s+in\s+entry/.test(resolver),
+        `src/voice_telegram/main.py: resolve_trusted_proxy_ips() no longer rejects a CIDR / whole-range TRUSTED_PROXY_IPS`);
+      assert(/ipaddress\.ip_address/.test(resolver),
+        `src/voice_telegram/main.py: resolve_trusted_proxy_ips() no longer validates each entry as an exact IP address`);
+      assert(/is_unspecified/.test(resolver),
+        `src/voice_telegram/main.py: resolve_trusted_proxy_ips() no longer rejects the unspecified address (0.0.0.0 / ::)`);
       assert(/os\.environ/.test(resolver),
         `${"src/voice_telegram/main.py"}: resolve_trusted_proxy_ips() no longer reads the TRUSTED_PROXY_IPS env var`);
     }
@@ -273,6 +284,19 @@ assert(/def test_spoofed_x_forwarded_for_cannot_rotate_the_throttle_bucket\b/.te
   assert(wild, "tests/test_admin.py: the wildcard TRUSTED_PROXY_IPS rejection test was removed");
   assert(wild && /resolve_trusted_proxy_ips/.test(wild) && /raises\(ValueError\)/.test(wild),
     "tests/test_admin.py: the wildcard test no longer asserts resolve_trusted_proxy_ips() raises on '*'");
+}
+
+{
+  const cidr = pyBlock(tests, "def", "test_private_range_trusted_proxy_ips_is_rejected");
+  assert(cidr, "tests/test_admin.py: the CIDR/private-range TRUSTED_PROXY_IPS rejection test was removed (the env override is then unproven)");
+  if (cidr) {
+    assert(/raises\(ValueError\)/.test(cidr),
+      "tests/test_admin.py: the CIDR TRUSTED_PROXY_IPS test no longer asserts resolve_trusted_proxy_ips() raises");
+    for (const needle of ["172.16.0.0/12", "10.0.0.0/8", "192.168.0.0/16"]) {
+      assert(new RegExp("^\\s*\"" + needle.replace(/[.\/]/g, m => "\\" + m) + "\",", "m").test(cidr),
+        `tests/test_admin.py: the CIDR TRUSTED_PROXY_IPS test no longer exercises ${needle}`);
+    }
+  }
 }
 
 if (failures.length) {

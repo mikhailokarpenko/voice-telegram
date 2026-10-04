@@ -167,8 +167,21 @@ const mutants = [
   ["import-time fail-fast resolve_trusted_proxy_ips() call removed", "main", s =>
     s.replace(/^resolve_trusted_proxy_ips\(\)$/m, "# resolve_trusted_proxy_ips()")],
   ["resolve_trusted_proxy_ips() deleted outright", "main", s =>
-    s.replace(/^def resolve_trusted_proxy_ips[\s\S]*?\n    return resolved\n/m, "")],
+    s.replace(/^def resolve_trusted_proxy_ips[\s\S]*?\n    return ",".join\(entries\)\n/m, "")],
 
+  // ---- BAS-223: deploy-time override may not re-bless a whole range -----
+  ["resolver drops the CIDR entry check (TRUSTED_PROXY_IPS=172.16.0.0/12 accepted)", "main", s =>
+    s.replace(/        if "\/" in entry:\n            raise ValueError\(\n[\s\S]*?\n            \)\n/, "")],
+  ["resolver stops parsing entries as exact IP addresses", "main", s =>
+    s.replace(/        try:\n            parsed = ipaddress\.ip_address\(entry\)\n[\s\S]*?from exc\n/, "            parsed = None\n")],
+  ["resolver stops rejecting the unspecified address", "main", s =>
+    s.replace(/        if parsed\.is_unspecified:\n            raise ValueError\(\n[\s\S]*?\n            \)\n/, "")],
+  ["CIDR/private-range rejection test removed", "tests", s =>
+    s.replace("def test_private_range_trusted_proxy_ips_is_rejected(", "def _disabled_cidr_test(")],
+  ["CIDR test no longer asserts the resolver raises", "tests", s =>
+    s.replace(/        with pytest\.raises\(ValueError\):\n            resolve_trusted_proxy_ips\(\)/, "        resolve_trusted_proxy_ips")],
+  ["CIDR test narrowed to drop the 172.16/12 range", "tests", s =>
+    s.replace('        "172.16.0.0/12",', '        "198.51.100.0/24",')],
   // ---- regression tests deleted / defanged ------------------------------
   ["brute-force regression test removed", "tests", s =>
     s.replace("def test_login_throttles_brute_force_and_clears_on_success(", "def _disabled_brute_force(")],
@@ -246,6 +259,22 @@ if (!runGuard()) {
   process.exit(1);
 }
 
+
+// --- vacuity floor (ratchet) ----------------------------------------------
+// A harness whose mutant list is emptied -- or filtered to nothing by a stale
+// anchor -- reports "0/0 caught" and exits 0: green while proving nothing.
+// That is the same "asserted nothing" defect the guards themselves exist to
+// catch, one level up. The floor counts mutants that ACTUALLY EXECUTED, so
+// neither deleting entries nor short-circuiting the loop can slip past it.
+// It may only be raised. Lowering it is a deliberate reduction in coverage.
+const MIN_MUTANTS_EXECUTED = 56;
+if ((results.length) < MIN_MUTANTS_EXECUTED) {
+  console.error(
+    `FAIL - vacuity floor: only ${results.length} mutants executed, but at least ${MIN_MUTANTS_EXECUTED} are required. ` +
+      "Mutants were removed or skipped; this audit understates the guard's blind spots.",
+  );
+  process.exit(1);
+}
 let bad = 0;
 for (const [name, status] of results) {
   if (status === "caught") console.log(`ok   - caught: ${name}`);

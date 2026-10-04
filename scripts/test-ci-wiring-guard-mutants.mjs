@@ -172,6 +172,22 @@ if (!after.ok) {
   process.exit(1);
 }
 
+
+// --- vacuity floor (ratchet) ----------------------------------------------
+// A harness whose mutant list is emptied -- or filtered to nothing by a stale
+// anchor -- reports "0/0 caught" and exits 0: green while proving nothing.
+// That is the same "asserted nothing" defect the guards themselves exist to
+// catch, one level up. The floor counts mutants that ACTUALLY EXECUTED, so
+// neither deleting entries nor short-circuiting the loop can slip past it.
+// It may only be raised. Lowering it is a deliberate reduction in coverage.
+const MIN_MUTANTS_EXECUTED = 13;
+if ((caught + escaped + noop) < MIN_MUTANTS_EXECUTED) {
+  console.error(
+    `FAIL - vacuity floor: only ${caught + escaped + noop} mutants executed, but at least ${MIN_MUTANTS_EXECUTED} are required. ` +
+      "Mutants were removed or skipped; this audit understates the guard's blind spots.",
+  );
+  process.exit(1);
+}
 console.log(
   `\nci-wiring guard mutation audit: ${caught} caught, ${escaped} escaped, ${noop} no-op ` +
     `(of ${mutants.length} mutants)`,

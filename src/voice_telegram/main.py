@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
@@ -35,11 +36,21 @@ TRUSTED_PROXY_IPS = "127.0.0.1,::1"
 
 
 def resolve_trusted_proxy_ips(value: str | None = None) -> str:
-    """Return the proxy trust list, rejecting the wildcard.
+    """Return the proxy trust list, rejecting anything broader than exact peers.
 
-    "*" (and an empty value, which uvicorn treats as unpinned) must never be
-    accepted from the environment: it is the exact configuration that made the
-    login throttle bypassable.
+    Two deploy-time values reopen the login-throttle bypass this constant
+    exists to close, so both are refused here rather than at review time:
+
+    * "*" (or an empty value, which uvicorn also treats as unpinned) trusts
+      X-Forwarded-For from every peer.
+    * a whole private range (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
+      fd00::/8, 0.0.0.0/0) blesses every co-resident container and every SSRF
+      pivot on the shared Docker networks. uvicorn does not expand CIDR anyway
+      -- it string-matches the peer address -- so a network literal silently
+      trusts nothing while reading as if it trusted the proxy.
+
+    Only exact IP addresses are accepted. Pin TRUSTED_PROXY_IPS to the reverse
+    proxy's own address(es).
     """
     resolved = (value if value is not None else os.environ.get("TRUSTED_PROXY_IPS")) or ""
     resolved = resolved.strip()
@@ -50,7 +61,31 @@ def resolve_trusted_proxy_ips(value: str | None = None) -> str:
             "TRUSTED_PROXY_IPS must not contain '*': trusting X-Forwarded-For from every "
             "peer lets an unauthenticated caller rotate the admin login throttle's bucket key"
         )
-    return resolved
+    entries = [entry.strip() for entry in resolved.split(",") if entry.strip()]
+    if not entries:
+        return TRUSTED_PROXY_IPS
+    for entry in entries:
+        if "/" in entry:
+            raise ValueError(
+                f"TRUSTED_PROXY_IPS entry {entry!r} is a network, not an address: a whole "
+                "private range trusts every co-resident container (and any SSRF pivot) to "
+                "set X-Forwarded-For and rotate the admin login throttle's bucket key. "
+                "Pin it to the reverse proxy's exact address."
+            )
+        try:
+            parsed = ipaddress.ip_address(entry)
+        except ValueError as exc:
+            raise ValueError(
+                f"TRUSTED_PROXY_IPS entry {entry!r} is not an IP address; uvicorn matches the "
+                "peer address literally, so anything else trusts nothing while reading as if "
+                "it trusted the proxy"
+            ) from exc
+        if parsed.is_unspecified:
+            raise ValueError(
+                f"TRUSTED_PROXY_IPS entry {entry!r} is the unspecified address, which is the "
+                "wildcard trust list under another name"
+            )
+    return ",".join(entries)
 
 
 # Fail fast at import time rather than serving with a wildcard trust list.
@@ -107,9 +142,12 @@ def main() -> None:
         # peer, so an unauthenticated caller rotates that header and gets a
         # fresh per-client bucket on every admin /login attempt -- the
         # brute-force throttle's per-client half is void and only the global
-        # cap remains (~14k guesses/day against one shared password). Trust is
-        # pinned to loopback + RFC1918/ULA, where the container-network reverse
-        # proxy actually connects from. Guarded by
+        # cap remains (~14k guesses/day against one shared password). Trust
+        # defaults to loopback only; a deployment that terminates at a reverse
+        # proxy pins TRUSTED_PROXY_IPS to that proxy's exact address. A whole
+        # private range (10/8, 172.16/12, 192.168/16, fd00::/8) is NOT
+        # acceptable: co-resident containers and SSRF pivots sit inside it and
+        # rotate X-Forwarded-For freely. Guarded by
         # scripts/check-login-throttle.mjs.
         forwarded_allow_ips=resolve_trusted_proxy_ips(),
         log_level=settings.log_level.lower(),

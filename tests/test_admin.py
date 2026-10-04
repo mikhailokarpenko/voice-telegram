@@ -169,3 +169,33 @@ def test_wildcard_trusted_proxy_ips_is_rejected(monkeypatch: pytest.MonkeyPatch)
     assert resolve_trusted_proxy_ips() == "172.20.0.5"
     monkeypatch.delenv("TRUSTED_PROXY_IPS")
     assert resolve_trusted_proxy_ips() == TRUSTED_PROXY_IPS
+
+
+def test_private_range_trusted_proxy_ips_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A CIDR / whole-private-range TRUSTED_PROXY_IPS must fail fast too.
+
+    The source default is loopback-only and guarded, but the env override was
+    only screened for "*". Setting TRUSTED_PROXY_IPS=172.16.0.0/12 at deploy
+    time re-blessed every co-resident container to rotate the login throttle's
+    bucket key -- the exact bypass BAS-223 reported.
+    """
+    from voice_telegram.main import TRUSTED_PROXY_IPS, resolve_trusted_proxy_ips
+
+    for bad in (
+        "172.16.0.0/12",
+        "10.0.0.0/8",
+        "192.168.0.0/16",
+        "fd00::/8",
+        "0.0.0.0/0",
+        "0.0.0.0",
+        "127.0.0.1,10.0.0.0/8",
+        "not-an-ip",
+    ):
+        monkeypatch.setenv("TRUSTED_PROXY_IPS", bad)
+        with pytest.raises(ValueError):
+            resolve_trusted_proxy_ips()
+
+    monkeypatch.setenv("TRUSTED_PROXY_IPS", "172.20.0.5, 172.20.0.6")
+    assert resolve_trusted_proxy_ips() == "172.20.0.5,172.20.0.6"
+    monkeypatch.delenv("TRUSTED_PROXY_IPS")
+    assert resolve_trusted_proxy_ips() == TRUSTED_PROXY_IPS
