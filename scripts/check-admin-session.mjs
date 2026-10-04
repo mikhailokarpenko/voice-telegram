@@ -39,6 +39,7 @@ const AUTH_PY = "src/voice_telegram/admin/auth.py";
 const ROUTES_PY = "src/voice_telegram/admin/routes.py";
 const DEP = "_require_auth";
 const COOKIE = "admin_token";
+const DECORATOR = /^\s*@router\.(get|post|put|patch|delete|api_route)\(/;
 // Endpoints that are unauthenticated by design. Anything else must depend on
 // the auth dependency. Keep this list minimal and justified:
 //   login  - mints the session (throttled; see check-login-throttle)
@@ -144,8 +145,13 @@ if (login) {
       `${ROUTES_PY}: the ${COOKIE} cookie is no longer SameSite=strict -- cross-site requests would carry the admin session (CSRF)`);
     assert(/secure\s*=\s*settings\.public_base_url\.startswith\("https"\)/.test(call),
       `${ROUTES_PY}: the ${COOKIE} cookie's Secure flag is no longer derived from the https deployment URL`);
-    assert(/create_token\(/.test(call),
-      `${ROUTES_PY}: the ${COOKIE} cookie value is no longer a freshly signed token`);
+    // The value may be inline or bound to a local first; both are fine, a
+    // constant is not.
+    const valueExpr = /value\s*=\s*([A-Za-z_][A-Za-z0-9_]*)/.exec(call) || /set_cookie\(\s*"[^"]*",\s*([A-Za-z_][A-Za-z0-9_.]*)/.exec(call);
+    const inline = /create_token\(/.test(call);
+    const bound = valueExpr && new RegExp(`\\b${valueExpr[1]}\\s*=\\s*create_token\\(`).test(login);
+    assert(inline || bound,
+      `${ROUTES_PY}: the ${COOKIE} cookie value is no longer a freshly signed create_token() result`);
     assert(/max_age\s*=/.test(call),
       `${ROUTES_PY}: the ${COOKIE} cookie no longer has a max_age -- it would persist as a session cookie only, or forever`);
   }
@@ -171,27 +177,43 @@ if (dep) {
 const lines = routes.split("\n");
 const found = [];
 for (let i = 0; i < lines.length; i++) {
-  const m = /^@router\.(get|post|put|patch|delete|api_route)\(\s*"([^"]*)"/.exec(lines[i]);
-  if (!m) continue;
-  let method = m[1].toUpperCase();
-  // find the handler def that follows the (possibly multi-line) decorator stack
-  let j = i;
+  // The decorator may span several lines (@app.api_route with a methods= list),
+  // so consume until its parens balance. A single-line regex silently skipped
+  // the proxy route here -- precisely the "discovery found fewer things than
+  // exist" vacuity this guard is meant to prevent.
+  if (!DECORATOR.test(lines[i])) continue;
+  let dec = lines[i];
+  let depth = (d) => (d.match(/[(]/g) || []).length - (d.match(/[)]/g) || []).length;
+  let k = i;
+  while (depth(dec) > 0 && k + 1 < lines.length) dec += "\n" + lines[++k];
+  const path = /\(\s*\n?\s*"([^"]*)"/.exec(dec);
+  if (!path) continue;
+  const verb = DECORATOR.exec(lines[i])[1].toUpperCase();
+  const methodsList = /methods\s*=\s*\[([^\]]*)\]/.exec(dec);
+  const methods = methodsList
+    ? methodsList[1].split(",").map((m) => m.trim().replace(/['"]/g, "")).filter(Boolean)
+    : [verb === "API_ROUTE" ? null : verb];
+  if (methods.some((m) => !m)) {
+    failures.push(`${ROUTES_PY}: an api_route decorator has no readable methods= list; refusing to bless it`);
+    continue;
+  }
+  let j = k;
   while (j < lines.length && !/^\s*(async\s+)?def\s+/.test(lines[j])) j++;
   const name = /def\s+([A-Za-z_][A-Za-z0-9_]*)/.exec(lines[j] || "");
   if (!name) continue;
-  const block = pyBlock(routes.split("\n").slice(j).join("\n"), "def", name[1]);
-  found.push({ key: `${method} ${m[2]}`, name: name[1], block });
+  const block = pyBlock(lines.slice(j).join("\n"), "def", name[1]);
+  found.push({ keys: methods.map((m) => `${m} ${path[1]}`), name: name[1], block });
 }
 assert(found.length >= 5,
   `${ROUTES_PY}: only ${found.length} routes were discovered; the decorator scan is broken or the router was gutted (a vacuous pass here would bless every route)`);
 for (const r of found) {
-  if (PUBLIC_ROUTES.has(r.key)) continue;
+  if (r.keys.every((k) => PUBLIC_ROUTES.has(k))) continue;
   assert(r.block, `${ROUTES_PY}: could not read the body of handler ${r.name} -- refusing to bless it`);
   assert(r.block && new RegExp(`Depends\\(\\s*${DEP}\\s*\\)`).test(r.block),
-    `${ROUTES_PY}: route ${r.key} (${r.name}) does not depend on ${DEP} -- it is UNAUTHENTICATED`);
+    `${ROUTES_PY}: route ${r.keys.join(" / ")} (${r.name}) does not depend on ${DEP} -- it is UNAUTHENTICATED`);
 }
 // The public list must not have grown.
-const publicFound = found.filter((r) => PUBLIC_ROUTES.has(r.key)).length;
+const publicFound = found.filter((r) => r.keys.every((k) => PUBLIC_ROUTES.has(k))).length;
 assert(publicFound === PUBLIC_ROUTES.size,
   `${ROUTES_PY}: expected exactly ${PUBLIC_ROUTES.size} intentionally-public routes, found ${publicFound} -- the allow-list and the router have diverged`);
 
