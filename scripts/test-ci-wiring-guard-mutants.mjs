@@ -139,6 +139,14 @@ const mutants = [
     (t) => t.replace(/const MIN_MUTANTS_EXECUTED\s*=\s*\d+;/, "// const MIN_MUTANTS_EXECUTED = 3;"),
   ],
   [
+    // The floor is inert if it is declared but never compared against. The
+    // first version of the ci-wiring rule missed exactly this: the identifier
+    // still occurs in the failure message, so an occurrence count passed.
+    "a harness floor is compared against a literal instead of the floor",
+    SAMPLE_HARNESS,
+    (t) => t.replace(/<\s*MIN_MUTANTS_EXECUTED\)/, "< 0)"),
+  ],
+  [
     "a harness can no longer exit non-zero",
     SAMPLE_HARNESS,
     (t) => t.replace(/process\.exit\(1\)/g, "process.exitCode = 0"),
@@ -196,7 +204,7 @@ if (!after.ok) {
 // catch, one level up. The floor counts mutants that ACTUALLY EXECUTED, so
 // neither deleting entries nor short-circuiting the loop can slip past it.
 // It may only be raised. Lowering it is a deliberate reduction in coverage.
-const MIN_MUTANTS_EXECUTED = 13;
+const MIN_MUTANTS_EXECUTED = 17;
 if ((caught + escaped + noop) < MIN_MUTANTS_EXECUTED) {
   console.error(
     `FAIL - vacuity floor: only ${caught + escaped + noop} mutants executed, but at least ${MIN_MUTANTS_EXECUTED} are required. ` +

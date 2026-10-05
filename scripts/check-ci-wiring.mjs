@@ -200,11 +200,23 @@ for (const h of harnesses) {
   const declaresFloor = text
     .split("\n")
     .some((l) => /^\s*(const|let|var)\s+MIN_MUTANTS_EXECUTED\s*=\s*\d+\s*;/.test(l));
-  const comparesFloor = /MIN_MUTANTS_EXECUTED/.test(text.replace(/^\s*\/\/.*$/gm, "")) && declaresFloor;
-  if (!comparesFloor) {
+  // Declaring the floor is not enough: the first version of this rule accepted
+  // a harness whose comparison had been rewritten to a literal
+  // (`results.length < 0`), because the identifier still appeared inside the
+  // failure message. The floor must actually be ONE SIDE OF A COMPARISON.
+  const stripped = text.replace(/^\s*\/\/.*$/gm, "");
+  const comparedRelationally =
+    /[<>]=?\s*MIN_MUTANTS_EXECUTED/.test(stripped) ||
+    /MIN_MUTANTS_EXECUTED\s*[<>]=?/.test(stripped);
+  if (!declaresFloor) {
     failures.push(
       `scripts/${h} declares no MIN_MUTANTS_EXECUTED vacuity floor; if its mutant list is emptied it would ` +
         "still exit 0. Add a floor equal to the number of mutants that execute today.",
+    );
+  } else if (!comparedRelationally) {
+    failures.push(
+      `scripts/${h} declares MIN_MUTANTS_EXECUTED but never compares the executed count against it; ` +
+        "the floor is inert and an emptied mutant list would still exit 0.",
     );
   } else if (!/process\.exit\(1\)/.test(text)) {
     failures.push(`scripts/${h} never exits non-zero; its result cannot fail CI.`);
