@@ -64,3 +64,19 @@ jobs:
         env:
           PYTHONPATH: src
         run: pytest -q
+      # Behavioural mutation audit (BAS-260). The static guard above only greps
+      # for the duration budget; this one weakens the watchdog for real and
+      # requires the executed pytest suite to go red. It needs Python, so it
+      # lives here rather than in the Node-only `guards` job, and is
+      # deliberately named outside the `test-*-guard-mutants.mjs` glob.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Mutation-audit the call-duration-budget behavioural tests
+        env:
+          PYTHONPATH: src
+          VOICE_TELEGRAM_PYTHON: python
+        run: |
+          set -e
+          node scripts/test-call-duration-budget-behavioural-mutants.mjs
+          git diff --exit-code
