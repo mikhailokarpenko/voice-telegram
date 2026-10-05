@@ -16,13 +16,27 @@ def _settings() -> Settings:
     )
 
 
-def test_admin_auth() -> None:
+# BAS-257: this was one `test_admin_auth` with four unnamed asserts. A failure
+# reported only the function name, so you had to read the body to learn which
+# control broke -- and the first failing assert masked the rest. Split.
+def test_correct_admin_password_is_accepted() -> None:
+    assert verify_password("testpass", _settings())
+
+
+def test_wrong_admin_password_is_rejected() -> None:
+    assert not verify_password("wrong", _settings())
+
+
+def test_a_minted_token_round_trips_to_the_admin_subject() -> None:
     settings = _settings()
-    assert verify_password("testpass", settings)
-    assert not verify_password("wrong", settings)
     assert decode_token(create_token(settings), settings)["sub"] == "admin"
+
+
+def test_an_expired_token_is_rejected() -> None:
+    settings = _settings()
+    expired = jwt.encode({"sub": "admin", "exp": 0}, "test-secret")
     with pytest.raises(HTTPException):
-        decode_token(jwt.encode({"sub": "admin", "exp": 0}, "test-secret"), settings)
+        decode_token(expired, settings)
 
 
 def test_admin_login_and_page() -> None:
