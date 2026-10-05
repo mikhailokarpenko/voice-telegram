@@ -119,11 +119,24 @@ for (const s of runSteps) {
 }
 
 // --- the harnesses rewrite real source files -------------------------------
-if (!/git diff --exit-code/.test(allRun)) {
+// Checked PER STEP, not across the whole workflow: with more than one mutation
+// loop (static guards + behavioural), a single `git diff --exit-code` anywhere
+// in the file would satisfy a global check while the other loop leaves a
+// mutated control in the tree for every later step to audit.
+const harnessLoopSteps = runSteps.filter((s) => /for\s+\w+\s+in\s+scripts\/test-/.test(s.run));
+if (harnessLoopSteps.length === 0) {
   failures.push(
-    "ci.yml no longer runs `git diff --exit-code` after the mutation harnesses; a harness that leaves a " +
-      "mutated control in the tree would go unnoticed, and every later guard would be auditing the mutant.",
+    "ci.yml runs no mutation-harness loop at all; no guard is ever shown red and all of them could be vacuous.",
   );
+}
+for (const s of harnessLoopSteps) {
+  if (!/git diff --exit-code/.test(s.run)) {
+    failures.push(
+      `the mutation-harness loop in step "${s.name ?? "(unnamed)"}" does not end with \`git diff --exit-code\`; a ` +
+        "harness that leaves a mutated control in the tree would go unnoticed, and every later guard would be " +
+        "auditing the mutant.",
+    );
+  }
 }
 
 // --- every check-*.mjs needs a harness that can show it red ----------------

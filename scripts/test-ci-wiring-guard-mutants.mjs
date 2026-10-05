@@ -51,6 +51,15 @@ const mutants = [
     (t) => t.replace(/\n\s*git diff --exit-code/, ""),
   ],
   [
+    "`git diff --exit-code` removed from only ONE of the mutation loops (a global check would still pass)",
+    CI,
+    (t) => {
+      const i = t.lastIndexOf("git diff --exit-code");
+      if (i === -1) return t;
+      return t.slice(0, t.lastIndexOf("\n", i)) + t.slice(i + "git diff --exit-code".length);
+    },
+  ],
+  [
     "`set -e` removed from the harness loop (red harness swallowed)",
     CI,
     (t) => t.replace(/\n(\s*)set -e\n/, "\n"),
@@ -136,7 +145,7 @@ const mutants = [
   [
     "a harness floor survives in a comment only (no numeric declaration)",
     SAMPLE_HARNESS,
-    (t) => t.replace(/const MIN_MUTANTS_EXECUTED\s*=\s*\d+;/, "// const MIN_MUTANTS_EXECUTED = 3;"),
+    (t) => t.replace(/const MIN_MUTANTS_EXECUTED\s*=\s*\d+;/, "// const MIN_MUTANTS_EXECUTED = 4;"),
   ],
   [
     // The floor is inert if it is declared but never compared against. The
