@@ -24,7 +24,10 @@ COPY pyproject.toml ./
 COPY src ./src
 COPY alembic.ini ./
 COPY migrations ./migrations
-RUN pip install --no-cache-dir .
+# gcc and the headers above are present in this image, so the TgCrypto speedup
+# compiles here even though it has no 3.12 wheel. Production keeps it; the test
+# install deliberately does not (see pyproject.toml).
+RUN pip install --no-cache-dir '.[speedups]'
 
 # Session files are supplied at runtime via a bind mount (see compose.yaml),
 # never baked into the image.

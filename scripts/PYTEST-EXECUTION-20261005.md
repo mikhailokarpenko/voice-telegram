@@ -91,3 +91,16 @@ has to park a behavioural test as `todo`.
 
 Both commits are **unpushed**, same blocked managed-GitHub-identity condition
 as BAS-233 / BAS-235 / BAS-216. No new blocker.
+
+## Addendum — the TgCrypto pin is fixed, not just documented
+
+Leaving the caveat in a handoff note would have meant the next agent hits the
+same wall. `TgCrypto==1.2.5` moved from `[project.dependencies]` to a new
+`[project.optional-dependencies].speedups` extra, and the Dockerfile now
+installs `.[speedups]` — that image already has `gcc` and the audio headers, so
+production keeps the speedup, while `pip install -e '.[dev]'` succeeds on a
+machine with no C toolchain.
+
+Verified: a clean `pip install -e '.[dev]'` now exits 0 here, `import pyrogram`
+works (it logs the "TgCrypto is missing" speed warning and runs), the suite is
+**184 passed**, and all 9 guard harnesses still pass.

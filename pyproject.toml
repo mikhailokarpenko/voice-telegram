@@ -15,7 +15,6 @@ dependencies = [
   "pyjwt==2.9.0",
   "kurigram==2.2.24",
   "py-tgcalls==2.3.3",
-  "TgCrypto==1.2.5",
   "sqlalchemy[asyncio]==2.0.40",
   "uvicorn[standard]==0.34.2",
   "websockets==14.2",
@@ -25,6 +24,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# TgCrypto is a pure speedup: pyrogram runs without it (it only logs a warning).
+# It ships no wheel for 3.12, so the sdist must be compiled, which makes a plain
+# `pip install -e '.[dev]'` fail on any machine without a C toolchain -- the
+# reason this test suite went unrun for so long. Keep it out of the hard
+# dependency set and install it explicitly where it is wanted (see Dockerfile).
+speedups = [
+  "TgCrypto==1.2.5",
+]
 dev = [
   "httpx==0.28.1",
   "mypy==1.15.0",
