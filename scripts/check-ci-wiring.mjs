@@ -123,7 +123,13 @@ for (const s of runSteps) {
 // loop (static guards + behavioural), a single `git diff --exit-code` anywhere
 // in the file would satisfy a global check while the other loop leaves a
 // mutated control in the tree for every later step to audit.
-const harnessLoopSteps = runSteps.filter((s) => /for\s+\w+\s+in\s+scripts\/test-/.test(s.run));
+// Any step that executes a mutation harness counts -- both the `for f in
+// scripts/test-*-guard-mutants.mjs` loops and the single-harness
+// behavioural steps that are deliberately named outside that glob. Matching
+// only the loop form let a behavioural step drop its `git diff --exit-code`
+// and leave a mutated control in the tree for every later step to audit.
+const harnessLoopSteps = runSteps.filter((s) =>
+  /for\s+\w+\s+in\s+scripts\/test-/.test(s.run) || /node\s+"?scripts\/test-[\w.-]*mutants\.mjs/.test(s.run));
 if (harnessLoopSteps.length === 0) {
   failures.push(
     "ci.yml runs no mutation-harness loop at all; no guard is ever shown red and all of them could be vacuous.",

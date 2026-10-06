@@ -1,0 +1,27 @@
+{
+  "_comment": "Byte-identical guard sources shared by voice-phone, voice-telegram and voice-web. check-shared-scripts.mjs fails if a local copy drifts from these digests. Changing a shared guard means updating all three repos AND this manifest in all three.",
+  "files": {
+    "check-ci-wiring.mjs": "1f87eb973b0bfd38e790956f9ca5f43ad6c025fcff1bf401b59ce92625179032",
+    "check-config-enums.mjs": {
+      "sha": "ed69dd0eecde34521e12fc0d869cc70b50687527b155940ac6606e8d8978b3df",
+      "optional": true
+    },
+    "check-security-headers.mjs": "374cca4e8e40234e13ecd269d9f740c9af6b3ce080afa5107f2437319c4c0962",
+    "check-shared-scripts.mjs": "d7d700b786fb9c4ab303b0724112dc8342340fc5da590f030eb7207efcb62af0",
+    "lib-html-sinks.mjs": {
+      "sha": "803b3321185572e61b6210a511828cf713a0f7fcf921b0c96dce800e4720b8f5",
+      "optional": true
+    },
+    "lib-markup-sweep.mjs": {
+      "sha": "0f1803638e82fb9d69b94f7cfa98722d5fb41c8a7348407e573bc052133fb995",
+      "optional": true
+    },
+    "lib-py-blocks.mjs": "c9d476a6bd322209a5aaa3596ba3717168bf798afbed34552d803022fb0e3e78",
+    "lib-workflow.mjs": "ef963f2b9875185448a315ca095f59415309ea81c60a3cd402769fd0e52d03c4",
+    "test-config-enum-guard-mutants.mjs": {
+      "sha": "0f84c12036e81b8f5f60bcaffd2706926ed35cf9a94b7196cdd9eeab9e2b41ff",
+      "optional": true
+    },
+    "test-shared-scripts-guard-mutants.mjs": "fba89121de873885fccfac2485f9fa1978f3a6c8dbc6f2746d7e43460a40a5a8"
+  }
+}

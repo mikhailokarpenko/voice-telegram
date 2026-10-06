@@ -43,3 +43,16 @@ export function intDefault(block, param) {
   const m = new RegExp(`${param}\\s*:\\s*int\\s*=\\s*(-?[0-9_]+)`).exec(block || "");
   return m ? Number(m[1].replace(/_/g, "")) : null;
 }
+
+/**
+ * Blank out triple-quoted strings (docstrings), preserving line count.
+ *
+ * Why: guards assert on the *code*, and prose that explains an attack
+ * necessarily names it ("...sets trust_env=True..."). Without this, a careful
+ * docstring makes a guard red, and -- worse -- the usual fix is to weaken the
+ * assertion. Line count is preserved so block extraction still lines up.
+ */
+export function stripDocstrings(src) {
+  return src.replace(/(?:[rbuf]{0,2})("""|''')[\s\S]*?\1/g, (m) =>
+    "\n".repeat((m.match(/\n/g) || []).length));
+}
