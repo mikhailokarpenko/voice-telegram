@@ -1,10 +1,12 @@
-from unittest.mock import AsyncMock, patch
+import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from voice_telegram.config import Settings
 from voice_telegram.providers.base import RealtimeSession
 from voice_telegram.providers.bridge import RealtimeBridge
+from voice_telegram.providers.openai import OpenAIRealtimeConnection
 from voice_telegram.telegram.client import (
     MULTILINGUAL_INSTRUCTION,
     LivePCMStream,
@@ -37,6 +39,33 @@ async def test_bridge_uses_exact_litellm_realtime_model() -> None:
     assert connect.await_args.kwargs["additional_headers"] == {
         "Authorization": "Bearer dedicated-key"
     }
+
+
+@pytest.mark.asyncio
+async def test_session_update_includes_temperature() -> None:
+    """Test that the session.update payload includes the configured temperature."""
+    socket = MagicMock()
+    socket.send = AsyncMock()
+
+    settings = Settings(realtime_temperature=1.0)
+    connection = OpenAIRealtimeConnection(socket, settings)
+
+    session = RealtimeSession(
+        instructions="test instructions",
+        opening_message="hello",
+        temperature=1.0,
+    )
+
+    await connection.configure(session)
+
+    # Verify that the session.update payload includes temperature
+    assert socket.send.call_count >= 1
+    first_call = socket.send.call_args_list[0]
+
+    payload = json.loads(first_call.args[0])
+    assert payload["type"] == "session.update"
+    assert "temperature" in payload["session"]
+    assert payload["session"]["temperature"] == 1.0
 
 
 def test_agent_instructions_preserve_website_prompt_and_enable_multilingual() -> None:

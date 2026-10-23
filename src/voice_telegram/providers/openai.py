@@ -27,6 +27,7 @@ class OpenAIRealtimeConnection(RealtimeConnection):
                     "type": "realtime",
                     "instructions": session.instructions,
                     "output_modalities": ["audio"],
+                    "temperature": session.temperature,
                     "audio": {
                         "input": {
                             "format": {"type": "audio/pcm", "rate": 24000},

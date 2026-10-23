@@ -318,6 +318,7 @@ class TelegramVoiceClient:
                     if active_config
                     else self.settings.silence_duration_ms
                 ),
+                temperature=self.settings.realtime_temperature,
             )
             self._bridge = RealtimeBridge(self.settings, session)
             await self._bridge.connect()

@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 MIN_ADMIN_JWT_SECRET_LENGTH = 32
@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     max_call_seconds: int = 1800
     vad_threshold: float = 0.5
     silence_duration_ms: int = 500
+    realtime_temperature: float = Field(default=0.8, ge=0.6, le=1.2)
 
     @model_validator(mode="after")
     def require_admin_credentials(self) -> "Settings":

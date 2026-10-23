@@ -26,6 +26,7 @@ class RealtimeSession:
     voice: str = ""
     vad_threshold: float = 0.5
     silence_duration_ms: int = 500
+    temperature: float = 0.8
 
 
 class RealtimeConnection(Protocol):
