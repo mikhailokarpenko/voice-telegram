@@ -1,8 +1,11 @@
 import asyncio
 import ipaddress
+import logging
 import os
+import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
@@ -13,6 +16,8 @@ from voice_telegram.config import Settings, get_settings
 from voice_telegram.database import Database
 from voice_telegram.security_headers import install_security_headers
 from voice_telegram.telegram.client import TelegramVoiceClient
+
+log = logging.getLogger(__name__)
 
 # Reverse-proxy addresses whose X-Forwarded-For is trusted. Never "*": with "*",
 # uvicorn's ProxyHeadersMiddleware rewrites scope["client"] from the first
@@ -102,13 +107,121 @@ def create_app(settings: Settings | None = None, *, start_telegram: bool = True)
         app.state.settings = resolved_settings
         app.state.database = database
         app.state.telegram = telegram
-        telegram_task = asyncio.create_task(telegram.start()) if start_telegram else None
+        app.state.telegram_healthy = True
+
+        watchdog_task: asyncio.Task[None] | None = None
+
+        async def connectivity_watchdog() -> None:
+            """Periodically check Telegram connectivity and log/alert on sustained failure."""
+            check_interval = 60  # seconds
+            failure_threshold = 3  # consecutive failures before alerting
+            consecutive_failures = 0
+            last_alert_time: float | None = None
+            alert_cooldown = 3600  # seconds between alerts (1 hour)
+
+            while True:
+                try:
+                    await asyncio.sleep(check_interval)
+                    if not start_telegram:
+                        continue
+
+                    is_connected = await telegram.is_connected()
+                    if is_connected:
+                        if consecutive_failures > 0:
+                            log.info(
+                                "Telegram connectivity restored after %d failed checks",
+                                consecutive_failures,
+                            )
+                            consecutive_failures = 0
+                            app.state.telegram_healthy = True
+                    else:
+                        consecutive_failures += 1
+                        app.state.telegram_healthy = False
+                        log.error(
+                            "Telegram connectivity check failed (consecutive failures: %d)",
+                            consecutive_failures,
+                        )
+
+                        if consecutive_failures >= failure_threshold:
+                            now = asyncio.get_event_loop().time()
+                            if last_alert_time is None or (now - last_alert_time) >= alert_cooldown:
+                                log.critical(
+                                    "Telegram connectivity degraded for %d consecutive checks. "
+                                    "Service is operating in degraded mode.",
+                                    consecutive_failures,
+                                )
+                                await send_ntfy_alert(
+                                    "voice-telegram: Telegram connectivity degraded",
+                                    f"Telegram client has failed connectivity checks for "
+                                    f"{consecutive_failures} consecutive attempts.",
+                                )
+                                last_alert_time = now
+                except asyncio.CancelledError:
+                    break
+                except Exception:
+                    log.exception("Unexpected error in connectivity watchdog")
+
+        async def send_ntfy_alert(title: str, message: str) -> None:
+            """Send an alert to ntfy if a topic is configured."""
+            # Try NTFY_TOPIC environment variable first
+            topic = os.environ.get("NTFY_TOPIC")
+            if not topic:
+                # Fall back to /root/.ntfy-topic file on this server
+                try:
+                    topic = await asyncio.to_thread(
+                        lambda: Path("/root/.ntfy-topic").read_text(encoding="utf-8").strip()
+                    )
+                except FileNotFoundError:
+                    log.debug(
+                        "No ntfy topic configured (no NTFY_TOPIC env var or /root/.ntfy-topic file)"
+                    )
+                    return
+                except Exception:
+                    log.exception("Failed to read /root/.ntfy-topic")
+                    return
+
+            if not topic:
+                return
+
+            import httpx
+
+            try:
+                async with httpx.AsyncClient() as client:
+                    await client.post(
+                        f"https://ntfy.sh/{topic}",
+                        content=message,
+                        headers={"Title": title, "Priority": "urgent"},
+                        timeout=10.0,
+                    )
+                    log.info("Sent ntfy alert to topic: %s", topic)
+            except Exception:
+                log.exception("Failed to send ntfy alert")
+
+        if start_telegram:
+            try:
+                await telegram.start()
+            except Exception:
+                log.critical(
+                    "Failed to start Telegram client. The service cannot function without "
+                    "Telegram connectivity. Exiting.",
+                    exc_info=True,
+                )
+                sys.exit(1)
+                # Unreachable, but linters don't know that
+                raise SystemExit(1) from None
+
+            watchdog_task = asyncio.create_task(connectivity_watchdog())
+
         yield
-        if telegram_task:
-            await telegram.stop()
-            telegram_task.cancel()
+
+        if watchdog_task:
+            watchdog_task.cancel()
             with suppress(asyncio.CancelledError):
-                await telegram_task
+                await watchdog_task
+
+        if start_telegram:
+            await telegram.stop()
+
         await database.close()
 
     app = FastAPI(title="Telegram Voice Agent", version="0.1.0", lifespan=lifespan)
@@ -121,8 +234,12 @@ def create_app(settings: Settings | None = None, *, start_telegram: bool = True)
     app.include_router(admin_router)
 
     @app.get("/health/ready")
-    async def health() -> dict[str, str]:
-        return {"status": "ok"}
+    async def health() -> dict[str, str | bool]:
+        telegram_healthy = getattr(app.state, "telegram_healthy", True)
+        return {
+            "status": "ok" if telegram_healthy else "degraded",
+            "telegram_healthy": telegram_healthy,
+        }
 
     return app
 

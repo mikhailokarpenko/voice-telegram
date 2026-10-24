@@ -193,6 +193,21 @@ class TelegramVoiceClient:
         log.info("Logged in as @%s (%s)", me.username, me.first_name)
         log.info("Waiting for calls (auto-answer enabled)")
 
+    async def is_connected(self) -> bool:
+        """Check if the Telegram client is connected and authenticated.
+
+        Returns True if the client can successfully fetch the current user,
+        False otherwise.
+        """
+        if not self.app:
+            return False
+        try:
+            await self.app.get_me()
+            return True
+        except Exception:
+            log.exception("Telegram client connectivity check failed")
+            return False
+
     async def stop(self) -> None:
         """Stop the Telegram client."""
         await self._teardown_call()
