@@ -1,6 +1,5 @@
 """Tests for audio resampling utilities."""
 
-import pytest
 
 from voice_telegram.audio import (
     OPENAI_CHUNK_BYTES,

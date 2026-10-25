@@ -107,7 +107,11 @@ def test_spoofed_x_forwarded_for_cannot_rotate_the_throttle_bucket() -> None:
 
     from voice_telegram.main import TRUSTED_PROXY_IPS
 
-    client = TestClient(ProxyHeadersMiddleware(create_app(_settings(), start_telegram=False), trusted_hosts=TRUSTED_PROXY_IPS))
+    client = TestClient(
+        ProxyHeadersMiddleware(
+            create_app(_settings(), start_telegram=False), trusted_hosts=TRUSTED_PROXY_IPS
+        )
+    )
     codes = [
         client.post(
             "/api/admin/login",
@@ -156,7 +160,9 @@ def test_private_range_peer_cannot_rotate_the_throttle_bucket(peer: str) -> None
 
     from voice_telegram.main import TRUSTED_PROXY_IPS
 
-    app = ProxyHeadersMiddleware(create_app(_settings(), start_telegram=False), trusted_hosts=TRUSTED_PROXY_IPS)
+    app = ProxyHeadersMiddleware(
+        create_app(_settings(), start_telegram=False), trusted_hosts=TRUSTED_PROXY_IPS
+    )
     client = TestClient(_PeerAs(app, peer))
     codes = [
         client.post(

@@ -4,6 +4,7 @@ Pyrogram builds its first msg_id before it knows the server clock, so a fresh
 process always fails once with BadMsgNotification 16; retrying works.
 """
 import os
+
 from pyrogram import Client
 from pyrogram.errors import BadMsgNotification
 
